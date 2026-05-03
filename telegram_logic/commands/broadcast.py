@@ -9,7 +9,7 @@ from telethon.tl.types import (
     MessageMediaWebPage,
 )
 from ..bot import bot
-from ..database import get_all_users
+from firebase_db.users import get_all_users
 
 log = logging.getLogger(__name__)
 

@@ -4,7 +4,7 @@ import random
 import logging
 from telethon import events
 from ..bot import bot
-from ..caching import get_cache_for_random
+from firebase_db.cache import get_cache_for_random
 
 from dotenv import load_dotenv
 load_dotenv()

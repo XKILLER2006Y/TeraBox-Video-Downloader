@@ -1,7 +1,7 @@
 from telethon import events, Button
 import logging
 from ..bot import bot
-from ..database import set_user_mode, get_user_mode
+from firebase_db.users import set_user_mode, get_user_mode
 
 log = logging.getLogger(__name__)
 AVAILABLE_MODES = ["get", "exp", "exphd"]

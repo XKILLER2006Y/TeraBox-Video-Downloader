@@ -12,7 +12,7 @@ from telegram_logic.bot import bot
 from telegram_logic.terabox_trad import process_terabox
 from telegram_logic.terabox_exp import process_terabox_experimental 
 from telegram_logic.helpers import extract_all_surls, extract_all_terabox_url
-from telegram_logic.database import track_user, get_user_mode
+from firebase_db.users import track_user, get_user_mode
 
 # — Global User Tracker ——————————————————————————————————————————————————————————————————
 

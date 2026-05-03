@@ -8,7 +8,7 @@ from telethon.errors import FloodWaitError
 
 from .bot import bot, _find_cached_video, _pre_upload_file, _upload_to_storage, _cancellable, terabox_queue, _safe_send, active_tasks, STORAGE_GROUP_ID
 from .helpers import format_size, format_duration, extract_surl
-from .caching import add_to_cache
+from firebase_db.cache import add_to_cache
 from .progress_callbacks import make_download_progress_cb, make_upload_progress_cb
 
 from terabox.public_api import TeraBoxError, CancelledError
