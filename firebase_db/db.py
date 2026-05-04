@@ -25,9 +25,13 @@ def _init_firebase() -> firestore.Client:
 
     if firebase_secrets_json:
         try:
+            # Strip accidental surrounding quotes that might have been copy-pasted
+            # into the Render environment variables dashboard
+            clean_json_str = firebase_secrets_json.strip().strip("'").strip('"')
+            
             # Parse the env-var JSON and write it out as a proper file.
             # credentials.Certificate(path) handles PEM parsing itself.
-            secrets_dict = json.loads(firebase_secrets_json)
+            secrets_dict = json.loads(clean_json_str)
             with open(generated_path, "w", encoding="utf-8") as f:
                 json.dump(secrets_dict, f, indent=2)
             log.info(f"Wrote credentials to {generated_path}")
