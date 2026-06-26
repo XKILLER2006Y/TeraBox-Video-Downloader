@@ -27,6 +27,26 @@ def migrate_users():
     logger.info(f"Found {total_users} users to migrate.")
 
     collection_ref = db.collection("users")
+
+    # Delete all existing users first
+    logger.info("Deleting all existing users from Firestore...")
+    docs = collection_ref.stream()
+    delete_batch = db.batch()
+    delete_count = 0
+    for doc in docs:
+        delete_batch.delete(doc.reference)
+        delete_count += 1
+        if delete_count % 400 == 0:
+            delete_batch.commit()
+            logger.info(f"Deleted {delete_count} existing users...")
+            delete_batch = db.batch()
+            time.sleep(0.5)
+    
+    if delete_count % 400 != 0:
+        delete_batch.commit()
+    logger.info(f"Total deleted users: {delete_count}")
+
+    # Push new users
     batch = db.batch()
     count = 0
     batch_count = 0

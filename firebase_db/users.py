@@ -53,6 +53,8 @@ def track_user(chat_id: int, username: str | None) -> None:
     below 15 min is irrelevant for /recent).
 
     New users are always written immediately.
+
+    Errors are caught and logged — never propagated to callers.
     """
     uid = str(chat_id)
     current_time = time.time()
@@ -66,38 +68,43 @@ def track_user(chat_id: int, username: str | None) -> None:
     if not is_new_user and not is_stale:
         return  # Skip — within debounce window
 
-    ref = db.collection(_USERS_COLLECTION).document(uid)
+    try:
+        ref = db.collection(_USERS_COLLECTION).document(uid)
 
-    if is_new_user:
-        # Cold-start: check Firestore to avoid overwriting an existing user
-        snap = ref.get()
-        if snap.exists:
-            existing = snap.to_dict()
-            _USERS_CACHE[uid] = existing
-            last_saved = existing.get("last_active", 0.0)
-            if (current_time - last_saved) < _WRITE_DEBOUNCE_SECONDS:
-                return  # Already updated recently — no write needed
-            # Update only last_active for returning user
-            ref.update({"last_active": current_time})
-            _USERS_CACHE[uid] = {**existing, "last_active": current_time}
-            log.debug(f"Updated last_active for existing user {uid} ({username})")
-            return
-        else:
-            # Brand-new user
-            user_data = {
-                "username":    username,
-                "last_active": current_time,
-                "mode":        "get",
-            }
-            ref.set(user_data)
-            _USERS_CACHE[uid] = user_data
-            log.info(f"Registered new user {uid} ({username})")
-            return
+        if is_new_user:
+            # Cold-start: check Firestore to avoid overwriting an existing user
+            snap = ref.get()
+            if snap.exists:
+                existing = snap.to_dict()
+                _USERS_CACHE[uid] = existing
+                last_saved = existing.get("last_active", 0.0)
+                if (current_time - last_saved) < _WRITE_DEBOUNCE_SECONDS:
+                    return  # Already updated recently — no write needed
+                # Update only last_active for returning user
+                ref.update({"last_active": current_time})
+                _USERS_CACHE[uid] = {**existing, "last_active": current_time}
+                log.debug(f"Updated last_active for existing user {uid} ({username})")
+                return
+            else:
+                # Brand-new user
+                user_data = {
+                    "username":    username,
+                    "last_active": current_time,
+                    "mode":        "get",
+                }
+                ref.set(user_data)
+                _USERS_CACHE[uid] = user_data
+                log.info(f"Registered new user {uid} ({username})")
+                return
 
-    # Returning user past debounce window — partial update
-    ref.update({"last_active": current_time})
-    _USERS_CACHE[uid]["last_active"] = current_time
-    log.debug(f"Refreshed last_active for user {uid}")
+        # Returning user past debounce window — partial update
+        ref.update({"last_active": current_time})
+        _USERS_CACHE[uid]["last_active"] = current_time
+        log.debug(f"Refreshed last_active for user {uid}")
+
+    except Exception as e:
+        log.error(f"[DB] track_user failed for uid={uid}: {e}")
+        # Non-fatal — tracking is best-effort, do not crash the bot
 
 
 def get_user_mode(chat_id: int) -> MODE:
@@ -105,38 +112,51 @@ def get_user_mode(chat_id: int) -> MODE:
     Return the user's current download mode.
     Reads from in-memory cache first; falls back to Firestore on cold-start.
     Default: "get"
+
+    Returns "get" on any DB error so the bot stays functional.
     """
     uid = str(chat_id)
 
     if uid in _USERS_CACHE:
         return _USERS_CACHE[uid].get("mode", "get")
 
-    # Cold-start: fetch from Firestore once, then cache
-    snap = db.collection(_USERS_COLLECTION).document(uid).get()
-    if snap.exists:
-        data = snap.to_dict()
-        _USERS_CACHE[uid] = data
-        return data.get("mode", "get")
+    try:
+        # Cold-start: fetch from Firestore once, then cache
+        snap = db.collection(_USERS_COLLECTION).document(uid).get()
+        if snap.exists:
+            data = snap.to_dict()
+            _USERS_CACHE[uid] = data
+            return data.get("mode", "get")
+    except Exception as e:
+        log.error(f"[DB] get_user_mode failed for uid={uid}: {e}")
 
-    return "get"  # Unknown user → default mode
+    return "get"  # Unknown user or DB error → default mode
 
 
-def set_user_mode(chat_id: int, mode: MODE) -> None:
+def set_user_mode(chat_id: int, mode: MODE) -> bool:
     """
     Persist the user's chosen download mode.
     Single-field update — no read-modify-write needed.
+
+    Returns True on success, False on DB error.
+    Raises no exceptions.
     """
     uid = str(chat_id)
-    db.collection(_USERS_COLLECTION).document(uid).set(
-        {"mode": mode},
-        merge=True,  # Creates doc if absent; only touches "mode" field
-    )
-    # Keep local cache in sync
-    if uid in _USERS_CACHE:
-        _USERS_CACHE[uid]["mode"] = mode
-    else:
-        _USERS_CACHE[uid] = {"mode": mode}
-    log.info(f"Set mode={mode} for user {uid}")
+    try:
+        db.collection(_USERS_COLLECTION).document(uid).set(
+            {"mode": mode},
+            merge=True,  # Creates doc if absent; only touches "mode" field
+        )
+        # Keep local cache in sync
+        if uid in _USERS_CACHE:
+            _USERS_CACHE[uid]["mode"] = mode
+        else:
+            _USERS_CACHE[uid] = {"mode": mode}
+        log.info(f"Set mode={mode} for user {uid}")
+        return True
+    except Exception as e:
+        log.error(f"[DB] set_user_mode failed for uid={uid}: {e}")
+        return False
 
 
 def get_all_users() -> dict[str, dict]:
@@ -144,9 +164,15 @@ def get_all_users() -> dict[str, dict]:
     Return all users as { str(chat_id): {username, last_active, mode} }.
     Used by /recent and /broadcast — these are infrequent admin commands,
     so a full collection scan is acceptable.
+
+    Returns an empty dict on DB error.
     """
-    docs = db.collection(_USERS_COLLECTION).stream()
-    result: dict[str, dict] = {}
-    for doc in docs:
-        result[doc.id] = doc.to_dict()
-    return result
+    try:
+        docs = db.collection(_USERS_COLLECTION).stream()
+        result: dict[str, dict] = {}
+        for doc in docs:
+            result[doc.id] = doc.to_dict()
+        return result
+    except Exception as e:
+        log.error(f"[DB] get_all_users failed: {e}")
+        return {}

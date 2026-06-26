@@ -25,7 +25,10 @@ async def global_tracker(event):
     elif getattr(event.chat, 'username', None):
         username = event.chat.username
 
-    track_user(event.chat_id, username)
+    try:
+        track_user(event.chat_id, username)
+    except Exception as e:
+        log.error(f"[global_tracker] Unexpected error in track_user: {e}")
     # Does not raise StopPropagation, allowing other handlers to execute
 
 import telegram_logic.commands  # registers all @bot.on(...) handlers  # noqa: F401
@@ -52,7 +55,12 @@ async def handle_message(event):
         return  # Let command handlers deal with commands
     
     # Get mode based on user-id..
-    mode = get_user_mode(event.chat_id)
+    try:
+        mode = get_user_mode(event.chat_id)
+    except Exception as e:
+        log.error(f"[handle_message] DB error fetching user mode: {e}")
+        await event.respond("⚠️ Database error. Please try again later.")
+        return
 
     if mode == 'get':
         surls = extract_all_surls(text)

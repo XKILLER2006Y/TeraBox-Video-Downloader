@@ -52,27 +52,33 @@ def _bucket_ref(bucket: str):
 
 # ── Public API ─────────────────────────────────────────────────────────────────
 
-def add_to_cache(surl: str, message_id: int, user_mode: MODE) -> None:
+def add_to_cache(surl: str, message_id: int, user_mode: MODE) -> bool:
     """
     Store surl → message_id in the bucket matching user_mode.
 
     Uses a single-field set with merge=True so we touch ONLY the new key —
     no read-modify-write cycle required.
-    """
-    # Firestore field names cannot contain "/", so encode if needed
-    safe_key = _encode_key(surl)
-    _bucket_ref(user_mode).set({safe_key: message_id}, merge=True)
-    log.debug(f"Cache add: bucket={user_mode}, surl={surl}, msg_id={message_id}")
 
-    # Invalidate /random snapshot so it refreshes on next call
-    _RANDOM_SNAPSHOT["timestamp"] = 0.0
+    Returns True on success, False on DB error. Never raises.
+    """
+    safe_key = _encode_key(surl)
+    try:
+        _bucket_ref(user_mode).set({safe_key: message_id}, merge=True)
+        log.debug(f"Cache add: bucket={user_mode}, surl={surl}, msg_id={message_id}")
+
+        # Invalidate /random snapshot so it refreshes on next call
+        _RANDOM_SNAPSHOT["timestamp"] = 0.0
+        return True
+    except Exception as e:
+        log.error(f"[DB] add_to_cache failed for surl={surl}, mode={user_mode}: {e}")
+        return False
 
 
 def search_in_cache(surl: str, user_mode: MODE) -> int:
     """
     Search for surl across buckets in priority order.
 
-    Returns message_id (int) on hit, -1 on miss.
+    Returns message_id (int) on hit, -1 on miss or DB error.
 
     Priority:
       get   → exphd, exp, get
@@ -92,13 +98,17 @@ def search_in_cache(surl: str, user_mode: MODE) -> int:
         search_order = ["exphd"]
 
     for bucket in search_order:
-        snap = _bucket_ref(bucket).get(field_paths=[safe_key])
-        if snap.exists:
-            data = snap.to_dict() or {}
-            msg_id = data.get(safe_key, -1)
-            if msg_id != -1:
-                log.info(f"Cache hit: bucket={bucket}, surl={surl}, msg_id={msg_id} (user_mode={user_mode})")
-                return int(msg_id)
+        try:
+            snap = _bucket_ref(bucket).get(field_paths=[safe_key])
+            if snap.exists:
+                data = snap.to_dict() or {}
+                msg_id = data.get(safe_key, -1)
+                if msg_id != -1:
+                    log.info(f"Cache hit: bucket={bucket}, surl={surl}, msg_id={msg_id} (user_mode={user_mode})")
+                    return int(msg_id)
+        except Exception as e:
+            log.error(f"[DB] search_in_cache failed for bucket={bucket}, surl={surl}: {e}")
+            # Continue trying remaining buckets — return -1 at end on full failure
 
     log.debug(f"Cache miss: surl={surl} (user_mode={user_mode})")
     return -1
@@ -110,6 +120,8 @@ def get_cache_for_random() -> dict:
 
     Refreshes from Firestore at most every 15 minutes (TTL-based snapshot).
     Merge order: get → exp → exphd  (exphd wins on key conflicts, highest quality).
+
+    Returns an empty dict on DB error.
     """
     global _RANDOM_SNAPSHOT
 
@@ -122,11 +134,15 @@ def get_cache_for_random() -> dict:
 
     merged: dict = {}
     for bucket in _BUCKETS:
-        snap = _bucket_ref(bucket).get()
-        if snap.exists:
-            bucket_data = snap.to_dict() or {}
-            # Decode keys back to surls before merging
-            merged.update({_decode_key(k): v for k, v in bucket_data.items()})
+        try:
+            snap = _bucket_ref(bucket).get()
+            if snap.exists:
+                bucket_data = snap.to_dict() or {}
+                # Decode keys back to surls before merging
+                merged.update({_decode_key(k): v for k, v in bucket_data.items()})
+        except Exception as e:
+            log.error(f"[DB] get_cache_for_random failed for bucket={bucket}: {e}")
+            # Continue with remaining buckets
 
     _RANDOM_SNAPSHOT["data"]      = merged
     _RANDOM_SNAPSHOT["timestamp"] = time.time()
@@ -134,7 +150,7 @@ def get_cache_for_random() -> dict:
 
 
 # ── Key encoding ───────────────────────────────────────────────────────────────
-# Firestore field names must match [a-zA-Z_][a-zA-Z_0-9]*.
+# Firestore field names must match [a-zA-Z_][a-zA-Z_0-9]*-.
 # TeraBox surls contain hyphens and may start with digits, both of which are
 # rejected by Firestore's unquoted property-path parser.
 #
