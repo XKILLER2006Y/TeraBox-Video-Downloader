@@ -1,32 +1,27 @@
 """
-Test script for _decode_env_json — simulates every mangled env-var format
-that Docker / Coolify / docker-compose can produce.
+Test script for _decode_env_json + _fix_private_key
+Simulates every mangled env-var format Docker / Coolify / docker-compose can produce.
 
 Run:  python test_decode.py
+      python -X utf8 test_decode.py    (on Windows if encoding errors)
 """
 
-import os
 import re
 import json
 import base64
 import logging
-import textwrap
 
-# ─── Set up logging so we can see which strategy fires ───────────────────────
 logging.basicConfig(level=logging.DEBUG, format="%(levelname)s: %(message)s")
 log = logging.getLogger(__name__)
 
 
 # ─── Copy of _decode_env_json from firebase_db/db.py ─────────────────────────
-# (self-contained so we don't need firebase_admin installed to test)
 
 def _decode_env_json(raw: str) -> dict:
     """Try progressively more aggressive strategies to parse *raw* into a dict."""
 
-    # ── 0. Strip BOM / invisible unicode whitespace
     cleaned = raw.strip().lstrip("\ufeff").strip()
 
-    # ── 1. Peel off wrapping quote layers (up to 3 deep)
     for _ in range(3):
         if cleaned.startswith("\\'") and cleaned.endswith("\\'"):
             cleaned = cleaned[2:-2]
@@ -38,92 +33,95 @@ def _decode_env_json(raw: str) -> dict:
         else:
             break
 
-    # ── 1b. Un-escape remaining backslash-quoted characters
     if '\\"' in cleaned or "\\'" in cleaned:
         cleaned = cleaned.replace('\\"', '"').replace("\\'", "'")
 
-    # ── 2. Try plain json.loads first (fast path)
+    # 2. Plain json.loads
     try:
         result = json.loads(cleaned)
         if isinstance(result, dict):
-            log.debug("Parsed on first attempt (plain JSON).")
             return result
     except (json.JSONDecodeError, ValueError):
         pass
 
-    # ── 3. Un-double-escape
+    # 3. Un-double-escape
     try:
         unescaped = cleaned.replace('\\"', '"')
         result = json.loads(unescaped)
         if isinstance(result, dict):
-            log.debug("Parsed after un-double-escaping.")
             return result
     except (json.JSONDecodeError, ValueError):
         pass
 
-    # ── 4. Fix literal \\n
+    # 4. Fix literal \\n
     try:
-        fixed_newlines = cleaned.replace("\\\\n", "\n").replace("\\n", "\n")
-        result = json.loads(fixed_newlines)
+        fixed = cleaned.replace("\\\\n", "\n").replace("\\n", "\n")
+        result = json.loads(fixed)
         if isinstance(result, dict):
-            log.debug("Parsed after fixing escaped newlines.")
             return result
     except (json.JSONDecodeError, ValueError):
         pass
 
-    # ── 5. Combined: un-double-escape + fix newlines
+    # 5. Combined
     try:
         combined = cleaned.replace('\\"', '"').replace("\\\\n", "\n").replace("\\n", "\n")
         result = json.loads(combined)
         if isinstance(result, dict):
-            log.debug("Parsed after combined unescape + newline fix.")
             return result
     except (json.JSONDecodeError, ValueError):
         pass
 
-    # ── 6. Try base64 decoding
+    # 6. Base64
     try:
         decoded_bytes = base64.b64decode(cleaned, validate=True)
         result = json.loads(decoded_bytes.decode("utf-8"))
         if isinstance(result, dict):
-            log.debug("Parsed from base64-encoded value.")
             return result
     except Exception:
         pass
 
-    # ── 7. Python-style dict with single quotes
+    # 7. Python dict
     try:
         import ast
         result = ast.literal_eval(cleaned)
         if isinstance(result, dict):
-            log.debug("Parsed via ast.literal_eval (Python dict).")
             return result
     except Exception:
         pass
 
-    # ── 8. Last resort: regex-extract the first JSON object
+    # 8. Regex extract
     try:
         match = re.search(r'\{.*\}', cleaned, re.DOTALL)
         if match:
             result = json.loads(match.group(0))
             if isinstance(result, dict):
-                log.debug("Parsed via regex JSON extraction.")
                 return result
     except (json.JSONDecodeError, ValueError):
         pass
 
-    # ── Nothing worked
-    preview = cleaned[:120] + ("…" if len(cleaned) > 120 else "")
     raise ValueError(
         f"Could not decode into a JSON dict.\n"
         f"  Length : {len(raw)} chars\n"
         f"  Starts: {repr(raw[:30])}\n"
-        f"  Ends  : {repr(raw[-30:])}\n"
-        f"  Preview (cleaned): {preview}"
+        f"  Ends  : {repr(raw[-30:])}"
     )
 
 
-# ─── Fake service-account JSON (with a PEM-like private_key) ─────────────────
+# ─── Copy of _fix_private_key from firebase_db/db.py ────────────────────────
+
+def _fix_private_key(creds: dict) -> None:
+    """Fix PEM private_key that has literal '\\n' instead of real newlines."""
+    pk = creds.get("private_key")
+    if not pk or "\n" in pk:
+        return
+    fixed = pk.replace("\\n", "\n").replace("\\\\n", "\n")
+    if not fixed.endswith("\n"):
+        fixed += "\n"
+    creds["private_key"] = fixed
+    log.debug("Fixed private_key: replaced literal \\n with real newlines.")
+
+
+# ─── Fake service-account JSON ───────────────────────────────────────────────
 
 SAMPLE_DICT = {
     "type": "service_account",
@@ -142,38 +140,36 @@ SAMPLE_DICT = {
 CLEAN_JSON = json.dumps(SAMPLE_DICT)
 
 
-# ─── Build test cases ────────────────────────────────────────────────────────
+# ─── Test cases ──────────────────────────────────────────────────────────────
 
 def build_test_cases():
-    """Return a list of (name, mangled_string) tuples."""
     cases = []
 
-    # 1. Clean JSON (happy path)
+    # 1. Clean JSON
     cases.append(("Clean JSON", CLEAN_JSON))
 
-    # 2. Single-quoted wrapper:  '{...}'
+    # 2. Single-quoted wrapper
     cases.append(("Single-quoted wrapper", f"'{CLEAN_JSON}'"))
 
-    # 3. Double-quoted wrapper:  "{...}"
+    # 3. Double-quoted wrapper
     cases.append(("Double-quoted wrapper", f'"{CLEAN_JSON}"'))
 
-    # 4. ★ COOLIFY EXACT FORMAT ★  — \'...\'  with  \"  inside
-    #    This is the EXACT format from the user's error log
+    # 4. COOLIFY EXACT FORMAT:  \'...\' with \" inside
     escaped_internals = CLEAN_JSON.replace('"', '\\"')
     coolify_format = f"\\'{escaped_internals}\\'"
-    cases.append(("Coolify \\' wrapper + \\\" internals (EXACT ERROR FORMAT)", coolify_format))
+    cases.append(("Coolify \\' + \\\" (1st error format)", coolify_format))
 
-    # 5. Double-escaped quotes only (no wrapper):  {\"key\": \"val\"}
+    # 5. Double-escaped quotes only
     cases.append(("Double-escaped quotes (no wrapper)", escaped_internals))
 
-    # 6. Double-quoted + double-escaped:  "{\"key\": \"val\"}"
+    # 6. Double-quoted + double-escaped
     cases.append(("Double-quoted + escaped internals", f'"{escaped_internals}"'))
 
-    # 7. Escaped newlines in private_key:  \\n instead of real \n
+    # 7. Escaped newlines in private_key
     escaped_newlines = CLEAN_JSON.replace("\n", "\\n")
     cases.append(("Escaped newlines (\\\\n)", escaped_newlines))
 
-    # 8. Combined: double-escaped quotes + escaped newlines
+    # 8. Escaped quotes + escaped newlines
     combined_mangled = CLEAN_JSON.replace('"', '\\"').replace("\n", "\\n")
     cases.append(("Escaped quotes + escaped newlines", combined_mangled))
 
@@ -181,27 +177,33 @@ def build_test_cases():
     b64 = base64.b64encode(CLEAN_JSON.encode("utf-8")).decode("ascii")
     cases.append(("Base64 encoded", b64))
 
-    # 10. Python-style single-quoted dict
+    # 10. Python dict (single quotes)
     py_dict = str(SAMPLE_DICT)
     cases.append(("Python dict (single quotes)", py_dict))
 
     # 11. BOM prefix
-    bom_json = "\ufeff" + CLEAN_JSON
-    cases.append(("UTF-8 BOM prefix", bom_json))
+    cases.append(("UTF-8 BOM prefix", "\ufeff" + CLEAN_JSON))
 
-    # 12. Extra whitespace + wrapping quotes
+    # 12. Whitespace + quotes
     cases.append(("Whitespace + quotes", f"  ' {CLEAN_JSON} '  "))
 
-    # 13. Triple-nested quotes:  '  "  '...'  "  '
+    # 13. Triple-nested quotes
     cases.append(("Triple-nested quotes", f"""'"{CLEAN_JSON}"'"""))
 
-    # 14. Garbage prefix/suffix around JSON
+    # 14. Garbage prefix/suffix
     cases.append(("Garbage prefix/suffix", f"EXPORT={CLEAN_JSON};"))
+
+    # 15. COOLIFY FULL PEM BREAKAGE: \' + \" + \\n in private_key
+    #     This is the EXACT scenario from the user's 2nd error:
+    #     JSON decodes fine but PEM has literal \n instead of real newlines
+    pem_mangled = CLEAN_JSON.replace("\n", "\\n").replace('"', '\\"')
+    coolify_pem = f"\\'{pem_mangled}\\'"
+    cases.append(("Coolify full (\\' + \\\" + \\\\n PEM) -- 2nd error", coolify_pem))
 
     return cases
 
 
-# ─── Run all tests ───────────────────────────────────────────────────────────
+# ─── Run ─────────────────────────────────────────────────────────────────────
 
 def main():
     cases = build_test_cases()
@@ -210,38 +212,44 @@ def main():
     width = 60
 
     print("=" * width)
-    print("  _decode_env_json  —  Robustness Test Suite")
+    print("  _decode_env_json + _fix_private_key  Test Suite")
     print("=" * width)
     print()
 
     for i, (name, mangled) in enumerate(cases, 1):
+        preview = repr(mangled[:70]) + ("..." if len(mangled) > 70 else "")
         print(f"Test {i:2d}: {name}")
-        print(f"         Input preview: {repr(mangled[:70])}{'…' if len(mangled) > 70 else ''}")
+        print(f"         Input: {preview}")
         try:
             result = _decode_env_json(mangled)
+            _fix_private_key(result)
 
-            # Verify the parsed dict has the expected keys
+            # Basic structure checks
             assert isinstance(result, dict), "Result is not a dict"
-            assert result.get("type") == "service_account", f"type={result.get('type')}"
-            assert result.get("project_id") == "telegram-bot-db-aebfb", "project_id mismatch"
-            assert "BEGIN" in result.get("private_key", ""), "private_key missing PEM header"
+            assert result.get("type") == "service_account"
+            assert result.get("project_id") == "telegram-bot-db-aebfb"
 
-            print(f"         ✅ PASSED  (keys: {len(result)})")
+            # PEM checks — the critical part
+            pk = result.get("private_key", "")
+            assert "BEGIN" in pk, "private_key missing PEM header"
+            assert "\n" in pk, "private_key has no real newlines!"
+            assert "\\" not in pk, f"private_key still has backslashes: {repr(pk[:60])}"
+            assert pk.startswith("-----BEGIN"), f"PEM header mangled: {pk[:30]}"
+
+            print(f"         [PASS]  keys={len(result)}, PEM OK")
             passed += 1
         except Exception as e:
-            # Only show first line of error
             err_line = str(e).split("\n")[0]
-            print(f"         ❌ FAILED  — {err_line}")
+            print(f"         [FAIL]  {err_line}")
             failed += 1
         print()
 
-    # Summary
     print("=" * width)
     total = passed + failed
     if failed == 0:
-        print(f"  🎉 ALL {total} TESTS PASSED")
+        print(f"  ALL {total} TESTS PASSED")
     else:
-        print(f"  ⚠️  {passed}/{total} passed, {failed} FAILED")
+        print(f"  {passed}/{total} passed, {failed} FAILED")
     print("=" * width)
 
     return 0 if failed == 0 else 1

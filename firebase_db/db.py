@@ -161,6 +161,29 @@ def _validate_service_account(creds: dict) -> None:
         )
 
 
+def _fix_private_key(creds: dict) -> None:
+    """Fix PEM private_key that has literal '\\n' instead of real newlines.
+
+    After Coolify/Docker double-escaping + JSON parsing, the private_key often
+    ends up with literal two-char sequences (backslash + 'n') instead of actual
+    newline characters.  The PEM parser then chokes on the backslash (byte 92).
+    """
+    pk = creds.get("private_key")
+    if not pk or "\n" in pk:
+        # Already has real newlines, or key is missing — nothing to fix
+        return
+
+    # Replace literal \n  and  \\n  sequences with real newlines
+    fixed = pk.replace("\\n", "\n").replace("\\\\n", "\n")
+
+    # Ensure the key ends with a trailing newline (PEM spec requires it)
+    if not fixed.endswith("\n"):
+        fixed += "\n"
+
+    creds["private_key"] = fixed
+    log.debug("Fixed private_key: replaced literal \\n with real newlines.")
+
+
 # ── Initialize Firebase Admin SDK (only once) ──────────────────────────────────
 # Reads FIREBASE_SECRETS env-var → writes fb_secrets.json → loads from file.
 # This avoids all \n / PEM-escaping issues that plague in-memory dict loading.
@@ -178,6 +201,7 @@ def _init_firebase() -> firestore.Client:
     if firebase_secrets_json:
         try:
             secrets_dict = _decode_env_json(firebase_secrets_json)
+            _fix_private_key(secrets_dict)
             _validate_service_account(secrets_dict)
 
             with open(generated_path, "w", encoding="utf-8") as f:
