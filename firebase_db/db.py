@@ -32,12 +32,22 @@ def _decode_env_json(raw: str) -> dict:
     cleaned = raw.strip().lstrip("\ufeff").strip()
 
     # ── 1. Peel off wrapping quote layers (up to 3 deep) ────────────────────
+    #    Handles:  '...'  "..."  \'...\'  \"...\"
     for _ in range(3):
-        if (cleaned.startswith("'") and cleaned.endswith("'")) or \
-           (cleaned.startswith('"') and cleaned.endswith('"')):
+        if (cleaned.startswith("\\'") and cleaned.endswith("\\'")):
+            cleaned = cleaned[2:-2]
+        elif (cleaned.startswith('\\"') and cleaned.endswith('\\"')):
+            cleaned = cleaned[2:-2]
+        elif (cleaned.startswith("'") and cleaned.endswith("'")) or \
+             (cleaned.startswith('"') and cleaned.endswith('"')):
             cleaned = cleaned[1:-1]
         else:
             break
+
+    # ── 1b. Un-escape remaining backslash-quoted characters ─────────────────
+    #    Coolify/Docker often escapes ALL quotes:  \" → "  and  \' → '
+    if '\\"' in cleaned or "\\'" in cleaned:
+        cleaned = cleaned.replace('\\"', '"').replace("\\'", "'")
 
     # ── 2. Try plain json.loads first (fast path) ───────────────────────────
     try:
