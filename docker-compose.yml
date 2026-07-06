@@ -1,0 +1,23 @@
+services:
+  telegram-bot:
+    build: .
+    image: telegram-bot:latest
+    container_name: telegram-bot
+    env_file:
+      - .env
+    environment:
+      PORT: ${PORT:-3000}
+    ports:
+      - "${PORT:-3000}:${PORT:-3000}"
+    volumes:
+      - storage_data:/app/storage
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${PORT:-3000}/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  storage_data:
