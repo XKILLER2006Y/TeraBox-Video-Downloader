@@ -105,13 +105,13 @@ async def run_bot() -> None:
 
     await bot.start(bot_token=BOT_TOKEN)
 
-    default_commands = [
+    default_commands = [ 
         BotCommand(command="start", description="Start BOT"),
+        BotCommand(command="exp", description="[Experimental] Download TeraBox video"), 
+        BotCommand(command="exphd", description="[Experimental] Download HD TeraBox video"), 
         BotCommand(command="get", description="Download TeraBox video [Unstable]"),
         BotCommand(command="random", description="Get a random video"), 
         BotCommand(command="settings", description="View Details"),
-        BotCommand(command="exp", description="[Experimental] Download TeraBox video"), 
-        BotCommand(command="exphd", description="[Experimental] Download HD TeraBox video"), 
         BotCommand(command="op", description="Send feedback to admin"),
     ]
 
