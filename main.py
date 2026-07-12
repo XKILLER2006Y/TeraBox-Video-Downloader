@@ -107,7 +107,7 @@ async def run_bot() -> None:
 
     default_commands = [
         BotCommand(command="start", description="Start BOT"),
-        BotCommand(command="get", description="Download TeraBox video"),
+        BotCommand(command="get", description="Download TeraBox video [Unstable]"),
         BotCommand(command="random", description="Get a random video"), 
         BotCommand(command="settings", description="View Details"),
         BotCommand(command="exp", description="[Experimental] Download TeraBox video"), 
@@ -115,7 +115,7 @@ async def run_bot() -> None:
         BotCommand(command="op", description="Send feedback to admin"),
     ]
 
-    await bot(SetBotCommandsRequest(
+    await bot(SetBotCommandsRequest( 
         scope=BotCommandScopeDefault(),
         lang_code="",
         commands=default_commands

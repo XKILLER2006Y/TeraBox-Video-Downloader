@@ -108,7 +108,7 @@ async def helper(event, terabox_url: str, is_hd: bool) -> None:
         info = await asyncio.to_thread(get_video_info, terabox_url, is_hd)
     except Exception as e:
         log.error(f"Metadata fetch failed for surl={surl}: {e}")
-        await _safe_send(status.edit, f"❌ Failed to get video info: {e}")
+        await _safe_send(status.edit, f"❌ Failed to get video info: {e}\n\nYou can try different *mode* to download.\nSwitch *mode* from /settings")
         active_tasks.pop(task_key, None)
         return
 
@@ -134,12 +134,12 @@ async def helper(event, terabox_url: str, is_hd: bool) -> None:
         return
     except TeraBoxError as e:
         log.error(f"Download error for surl={surl}: {e}")
-        await _safe_send(status.edit, f"❌ Download failed: {e}")
+        await _safe_send(status.edit, f"❌ Download failed: {e}\n\nYou can try different *mode* to download.\nSwitch *mode* from /settings")
         active_tasks.pop(task_key, None)
         return
     except Exception as e:
         log.exception(f"Unexpected download error for surl={surl}")
-        await _safe_send(status.edit, f"❌ Download failed: {e}")
+        await _safe_send(status.edit, f"❌ Download failed: {e}\n\nYou can try different *mode* to download.\nSwitch *mode* from /settings")
         active_tasks.pop(task_key, None)
         return
     dl_time = time.time() - dl_start
@@ -259,7 +259,7 @@ async def helper(event, terabox_url: str, is_hd: bool) -> None:
         except Exception as e:
             log.error(f"Direct upload failed for surl={surl}: {e}")
             _cleanup_files(filepath, os.path.splitext(filepath)[0] + ".ts")
-            await _safe_send(status.edit, f"❌ Upload failed: {e}")
+            await _safe_send(status.edit, f"❌ Upload failed: {e}\n\nYou can try different *mode* to download.\nSwitch *mode* from /settings")
             active_tasks.pop(task_key, None)
             return
 

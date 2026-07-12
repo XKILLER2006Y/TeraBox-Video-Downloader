@@ -90,7 +90,7 @@ def track_user(chat_id: int, username: str | None) -> None:
                 user_data = {
                     "username":    username,
                     "last_active": current_time,
-                    "mode":        "get",
+                    "mode":        "exp",
                 }
                 ref.set(user_data)
                 _USERS_CACHE[uid] = user_data
@@ -111,14 +111,14 @@ def get_user_mode(chat_id: int) -> MODE:
     """
     Return the user's current download mode.
     Reads from in-memory cache first; falls back to Firestore on cold-start.
-    Default: "get"
+    Default: "exp"
 
-    Returns "get" on any DB error so the bot stays functional.
+    Returns "exp" on any DB error so the bot stays functional.
     """
     uid = str(chat_id)
 
     if uid in _USERS_CACHE:
-        return _USERS_CACHE[uid].get("mode", "get")
+        return _USERS_CACHE[uid].get("mode", "exp")
 
     try:
         # Cold-start: fetch from Firestore once, then cache
@@ -126,11 +126,11 @@ def get_user_mode(chat_id: int) -> MODE:
         if snap.exists:
             data = snap.to_dict()
             _USERS_CACHE[uid] = data
-            return data.get("mode", "get")
+            return data.get("mode", "exp")
     except Exception as e:
         log.error(f"[DB] get_user_mode failed for uid={uid}: {e}")
 
-    return "get"  # Unknown user or DB error → default mode
+    return "exp"  # Unknown user or DB error → default mode
 
 
 def set_user_mode(chat_id: int, mode: MODE) -> bool:

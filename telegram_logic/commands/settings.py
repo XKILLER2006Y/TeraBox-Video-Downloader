@@ -81,8 +81,8 @@ async def cb_set_mode(event):
     await event.delete()  
     await event.respond(
         f"✅ **Mode switched successfully to [{mode}]**\n\n"
-        f"➡️ **get** : Most reliable & fast\n"
-        f"➡️ **exp** : Backup for `get`[SLOW]\n"
-        f"➡️ **exphd** : For HD Videos [Very SLOW]"
+        f"➡️ **get** : Unstable [Use for small files]\n"
+        f"➡️ **exp** : Reliable & Fast [Recommended]\n"
+        f"➡️ **exphd** : For HD Videos [Slow]"
     )
     raise events.StopPropagation
