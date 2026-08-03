@@ -6,7 +6,7 @@ Firestore-backed video cache, replacing the old GitHub Gist approach.
 Firestore layout
 ----------------
 Collection : cache
-Documents  : "get" | "exp" | "exphd"
+Documents  : "get" | "exp" | "exphd" | "dw"
 Fields     : { <surl>: <message_id (int)>, ... }
 
 Why one document per bucket instead of one massive document?
@@ -20,6 +20,7 @@ Search priority (same as old Gist implementation):
   get   → exphd → exp → get
   exp   → exphd → exp
   exphd → exphd only
+  dw    → dw only   (Diskwala is a separate source, no cross-lookup)
 """
 
 import base64
@@ -33,9 +34,9 @@ log = logging.getLogger(__name__)
 
 # ── Types & constants ──────────────────────────────────────────────────────────
 
-MODE = Literal["get", "exp", "exphd"]
+MODE = Literal["get", "exp", "exphd", "dw"]
 _CACHE_COLLECTION = "cache"
-_BUCKETS = ("get", "exp", "exphd")
+_BUCKETS = ("get", "exp", "exphd", "dw")
 
 # ── In-memory snapshot for /random ────────────────────────────────────────────
 # Avoids a Firestore read on every /random call.
@@ -94,6 +95,8 @@ def search_in_cache(surl: str, user_mode: MODE) -> int:
         search_order = ["exphd", "exp", "get"]
     elif user_mode == "exp":
         search_order = ["exphd", "exp"]
+    elif user_mode == "dw":
+        search_order = ["dw"]
     else:  # exphd
         search_order = ["exphd"]
 

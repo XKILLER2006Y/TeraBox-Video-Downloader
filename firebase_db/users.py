@@ -31,7 +31,7 @@ log = logging.getLogger(__name__)
 
 # ── Types ──────────────────────────────────────────────────────────────────────
 
-MODE = Literal["get", "exp", "exphd"]
+MODE = Literal["get", "exp", "exphd", "dw"]
 
 # ── In-memory cache (reduces Firestore reads) ──────────────────────────────────
 # Structure: { str(chat_id): {"username": ..., "last_active": float, "mode": ...} }

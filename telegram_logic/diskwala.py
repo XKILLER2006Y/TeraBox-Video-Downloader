@@ -1,33 +1,37 @@
 import os
-import time 
+import time
 import threading
 import asyncio
 import logging
 from telethon import Button
 from telethon.errors import FloodWaitError
 
-from .bot import bot, _find_cached_video, _pre_upload_file, _upload_to_storage, _cancellable, terabox_queue, _safe_send, active_tasks, STORAGE_GROUP_ID
-from .helpers import format_size, format_duration, extract_surl_exp
+from .bot import (
+    bot, _find_cached_video, _pre_upload_file, _upload_to_storage,
+    _cancellable, terabox_queue, _safe_send, active_tasks, STORAGE_GROUP_ID,
+)
+from .helpers import format_size, format_duration
 from firebase_db.cache import add_to_cache
 from .progress_callbacks import make_download_progress_cb, make_upload_progress_cb
 
 from terabox.public_api import TeraBoxError, CancelledError
 from teraboxDL.public_api import download_terabox_file_experimental
-from teraboxDL.terabox_dl import get_video_info
-
-from dotenv import load_dotenv
-load_dotenv()
+from diskwalaDL.public_api import get_diskwala_info, extract_diskwala_id, DiskwalaError
 
 log = logging.getLogger(__name__)
+
+# Diskwala shares its own cache bucket / user mode.
+DW_MODE = "dw"
+
 
 # — Heart Function —————————————————————————————————————————————————————————————
 
 #! ONLY PUBLIC API
-async def process_terabox_experimental(event, terabox_url: str, is_hd: bool = False) -> None:
+async def process_diskwala(event, diskwala_url: str) -> None:
     # If currently in flood cooldown → queue immediately
     rem = terabox_queue.flood_remaining()
     if rem > 0:
-        await terabox_queue.put(helper, event, terabox_url, is_hd)
+        await terabox_queue.put(_dw_helper, event, diskwala_url)
         try:
             await event.respond(
                 "⏳ Bot overloaded! Your request has been queued "
@@ -42,11 +46,11 @@ async def process_terabox_experimental(event, terabox_url: str, is_hd: bool = Fa
     # Try processing normally under the semaphore
     async with terabox_queue.semaphore:
         try:
-            await helper(event, terabox_url, is_hd)
+            await _dw_helper(event, diskwala_url)
         except FloodWaitError as e:
             # Pipeline hit flood → set cooldown, queue, notify user
             terabox_queue.update_flood_until(e.seconds)
-            await terabox_queue.put(helper, event, terabox_url, is_hd)
+            await terabox_queue.put(_dw_helper, event, diskwala_url)
             try:
                 await event.respond(
                     f"⏳ Bot overloaded! Your request has been queued "
@@ -56,18 +60,18 @@ async def process_terabox_experimental(event, terabox_url: str, is_hd: bool = Fa
                 pass
 
 
-async def helper(event, terabox_url: str, is_hd: bool) -> None:
+async def _dw_helper(event, diskwala_url: str) -> None:
     """Inner pipeline, runs under the concurrency semaphore."""
     chat_id = event.chat_id
-    surl = extract_surl_exp(terabox_url)
-    user_mode = "exphd" if is_hd else "exp"
-    task_key = (chat_id, surl)
+    link_id = extract_diskwala_id(diskwala_url) or diskwala_url
+    user_mode = DW_MODE
+    task_key = (chat_id, link_id)
     total_start = time.time()
 
     cancel_event = threading.Event()
     active_tasks[task_key] = cancel_event
 
-    cancel_btn = [[Button.inline("❌ Cancel", data=f"cancel:{surl}")]]
+    cancel_btn = [[Button.inline("❌ Cancel", data=f"cancel:{link_id}")]]
 
     def _cleanup_files(*paths):
         """Remove temp/downloaded files from disk."""
@@ -80,13 +84,13 @@ async def helper(event, terabox_url: str, is_hd: bool) -> None:
                     log.warning(f"Could not clean up {p}: {e}")
 
     # — Phase 1: Cache lookup ——————————————————————————————————————————————
-    status = await _safe_send(event.respond, f"🔍 Checking cache for `{surl}`…")
+    status = await _safe_send(event.respond, f"🔍 Checking cache for `{link_id}`…")
 
-    cached_msg = await _find_cached_video(surl, user_mode)
+    cached_msg = await _find_cached_video(link_id, user_mode)
     if cached_msg is not None:
         try:
             f = cached_msg.file
-            fname = (f.name if f and f.name else surl)
+            fname = (f.name if f and f.name else link_id)
             caption = f"📦 `{fname}`"
             await _safe_send(
                 bot.send_file,
@@ -95,20 +99,25 @@ async def helper(event, terabox_url: str, is_hd: bool) -> None:
             )
             await _safe_send(status.delete)
         except Exception as e:
-            log.warning(f"re-send failed for surl={surl}: {e}")
+            log.warning(f"re-send failed for link_id={link_id}: {e}")
             await _safe_send(status.edit, "❌ Failed to send video.")
         active_tasks.pop(task_key, None)
         return
 
     # — Phase 2: Prepare metadata ——————————————————————————————————————————
-    await _safe_send(status.edit, f"⏳ Fetching metadata…", buttons=cancel_btn)
+    await _safe_send(status.edit, "⏳ Fetching metadata…", buttons=cancel_btn)
 
     #! GET FILE INFO
     try:
-        info = await asyncio.to_thread(get_video_info, terabox_url, is_hd)
+        info = await asyncio.to_thread(get_diskwala_info, diskwala_url)
+    except DiskwalaError as e:
+        log.error(f"Diskwala metadata fetch failed for {link_id}: {e}")
+        await _safe_send(status.edit, f"❌ Failed to get video info: {e}")
+        active_tasks.pop(task_key, None)
+        return
     except Exception as e:
-        log.error(f"Metadata fetch failed for surl={surl}: {e}")
-        await _safe_send(status.edit, f"❌ Failed to get video info: {e}\n\nYou can try different *mode* to download.\nSwitch *mode* from /settings")
+        log.exception(f"Unexpected Diskwala metadata error for {link_id}")
+        await _safe_send(status.edit, f"❌ Failed to get video info: {e}")
         active_tasks.pop(task_key, None)
         return
 
@@ -127,19 +136,21 @@ async def helper(event, terabox_url: str, is_hd: bool) -> None:
     dl_start = time.time()
     dl_progress_cb = make_download_progress_cb(status, filename, size_str, loop, cancel_btn)
     try:
-        filepath = await asyncio.to_thread(download_terabox_file_experimental, download_url, filename, cancel_event, dl_progress_cb)
+        filepath = await asyncio.to_thread(
+            download_terabox_file_experimental, download_url, filename, cancel_event, dl_progress_cb
+        )
     except CancelledError:
         await _safe_send(status.edit, "🚫 Cancelled.")
         active_tasks.pop(task_key, None)
         return
     except TeraBoxError as e:
-        log.error(f"Download error for surl={surl}: {e}")
-        await _safe_send(status.edit, f"❌ Download failed: {e}\n\nYou can try different *mode* to download.\nSwitch *mode* from /settings")
+        log.error(f"Download error for {link_id}: {e}")
+        await _safe_send(status.edit, f"❌ Download failed: {e}")
         active_tasks.pop(task_key, None)
         return
     except Exception as e:
-        log.exception(f"Unexpected download error for surl={surl}")
-        await _safe_send(status.edit, f"❌ Download failed: {e}\n\nYou can try different *mode* to download.\nSwitch *mode* from /settings")
+        log.exception(f"Unexpected download error for {link_id}")
+        await _safe_send(status.edit, f"❌ Download failed: {e}")
         active_tasks.pop(task_key, None)
         return
     dl_time = time.time() - dl_start
@@ -150,16 +161,10 @@ async def helper(event, terabox_url: str, is_hd: bool) -> None:
         active_tasks.pop(task_key, None)
         return
 
-    # Use actual file size (compressed TS/MP4) instead of original API size
+    # Use actual file size on disk instead of the API-reported size
     size_str = format_size(os.path.getsize(filepath))
 
     # — Phase 4: Upload to storage group (cache) ———————————————————————————
-    if cancel_event.is_set():
-        _cleanup_files(filepath, os.path.splitext(filepath)[0] + ".ts")
-        await _safe_send(status.edit, "🚫 Cancelled.")
-        active_tasks.pop(task_key, None)
-        return
-
     up_start = time.time()
     storage_msg = None
     input_file = None  # reusable Telegram upload handle
@@ -176,15 +181,15 @@ async def helper(event, terabox_url: str, is_hd: bool) -> None:
             input_file = await _cancellable(_pre_upload_file(filepath, progress_cb), cancel_event)
             storage_msg = await _cancellable(_upload_to_storage(input_file, filename), cancel_event)
             if storage_msg is not None:
-                await asyncio.to_thread(add_to_cache, surl, storage_msg.id, user_mode)
+                await asyncio.to_thread(add_to_cache, link_id, storage_msg.id, user_mode)
         except asyncio.CancelledError:
-            log.info(f"Upload cancelled by user for surl={surl}")
+            log.info(f"Upload cancelled by user for {link_id}")
             _cleanup_files(filepath, os.path.splitext(filepath)[0] + ".ts")
             await _safe_send(status.edit, "🚫 Cancelled.")
             active_tasks.pop(task_key, None)
             return
         except Exception as e:
-            log.error(f"Storage upload failed for surl={surl}: {e}")
+            log.error(f"Storage upload failed for {link_id}: {e}")
             input_file = None  # clear so fallback re-uploads from disk
             # storage_msg stays None → fall back to direct upload below
 
@@ -213,7 +218,7 @@ async def helper(event, terabox_url: str, is_hd: bool) -> None:
                 reply_to=event.message.id,
             )
         except Exception as e:
-            log.warning(f"Re-send from storage failed for surl={surl}, sending directly: {e}")
+            log.warning(f"Re-send from storage failed for {link_id}, sending directly: {e}")
 
     if sent_video is None:
         # Use the pre-uploaded handle if available, otherwise fall back to disk
@@ -251,15 +256,15 @@ async def helper(event, terabox_url: str, is_hd: bool) -> None:
             except Exception:
                 pass
         except asyncio.CancelledError:
-            log.info(f"Direct upload cancelled by user for surl={surl}")
+            log.info(f"Direct upload cancelled by user for {link_id}")
             _cleanup_files(filepath, os.path.splitext(filepath)[0] + ".ts")
             await _safe_send(status.edit, "🚫 Cancelled.")
             active_tasks.pop(task_key, None)
             return
         except Exception as e:
-            log.error(f"Direct upload failed for surl={surl}: {e}")
+            log.error(f"Direct upload failed for {link_id}: {e}")
             _cleanup_files(filepath, os.path.splitext(filepath)[0] + ".ts")
-            await _safe_send(status.edit, f"❌ Upload failed: {e}\n\nYou can try different *mode* to download.\nSwitch *mode* from /settings")
+            await _safe_send(status.edit, f"❌ Upload failed: {e}")
             active_tasks.pop(task_key, None)
             return
 

@@ -4,7 +4,7 @@ from ..bot import bot
 from firebase_db.users import set_user_mode, get_user_mode
 
 log = logging.getLogger(__name__)
-AVAILABLE_MODES = ["get", "exp", "exphd"]
+AVAILABLE_MODES = ["get", "exp", "exphd", "dw"]
 
 @bot.on(events.NewMessage(pattern="/settings"))
 async def cmd_settings(event):
@@ -83,6 +83,7 @@ async def cb_set_mode(event):
         f"✅ **Mode switched successfully to [{mode}]**\n\n"
         f"➡️ **get** : Unstable [Use for small files]\n"
         f"➡️ **exp** : Reliable & Fast [Recommended]\n"
-        f"➡️ **exphd** : For HD Videos [Slow]"
+        f"➡️ **exphd** : For HD Videos [Slow]\n"
+        f"➡️ **dw** : Download Diskwala videos"
     )
     raise events.StopPropagation

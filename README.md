@@ -1,52 +1,118 @@
-# TeraBox Video Downloader
+# TeraBox / Diskwala Video Downloader
 
-Downloads full-length videos from TeraBox by reconstructing them from HLS streaming segments.
+Downloads full-length videos from **TeraBox** (and its mirror domains) and **Diskwala**, then delivers them through Telegram — caching each video once in a storage group and re-forwarding it on repeat requests.
 
 ---
 
 ## Features
 
-- **Auto-detect links**: Paste a TeraBox URL anywhere in a message; it will auto-download according to your selected mode.
-- **Dual Download Engines**:
-  - **Traditional (`/get`)**: Budget-capped TS chunk collector relying on rotating cookies.
-  - **Experimental (`/exp` / `/exphd`)**: A fast, concurrent headless browser pool (Chromium) to extract and download fast CDN links, bypassing API rate limits.
+- **Auto-detect links**: Paste a TeraBox or Diskwala URL anywhere in a message; it auto-downloads according to your selected mode.
+- **Three download engines / four modes**:
+  - **Traditional (`/get`)** — Budget-capped TS chunk collector relying on rotating cookies. *[Unstable — best for small files]*
+  - **Experimental (`/exp`, `/exphd`)** — Fast extractor via a scraper proxy that resolves direct CDN links; `/exphd` targets HD. *[Recommended]*
+  - **Diskwala (`/dw`)** — Resolves Diskwala share links via a scraper proxy and downloads the direct video. *[New]*
+- **Expanded TeraBox domain support** (`/exp`, `/exphd`): `terabox.com`, `1024terabox.com`, `teraboxapp.com`, `freeterabox.com`, `terabox.app`, `terabox.fun`, `4funbox.co/.com`, `mirrobox.com`, `nephobox.com`, `1024tera.com`, `momerybox.com`, `tibibox.com` (with optional `www.`), in both `{base}/<something>/{SURL}` and `{base}/{SURL}` URL shapes.
+- **Smart mode hints**: Sending a Diskwala link while in a TeraBox mode (or a TeraBox link while in `dw` mode) replies with the correct command / mode to switch to, instead of silently ignoring it.
 - **`/random`**: Re-sends a random previously cached video.
-- **`/settings`**: Switch between default auto-download modes (`get`, `exp`, `exphd`).
-- **`/info`**: Displays current chat and user details.
+- **`/settings`**: Switch the default auto-download mode (`get`, `exp`, `exphd`, `dw`).
+- **`/op <msg>`**: Send feedback to the admin.
 - **Admin Commands**:
   - **`/recent`**: Show recent users interacting with the bot.
   - **`/broadcast`**: Broadcast a message to all known users and groups.
-- **Cancel button**: Inline button to abort an in-progress download.
-- **Telegram-side caching**: Uploads each video once to a storage group and re-forwards on repeat requests (`cache.json` & Gist database).
-- **Persistent DB via GitHub Gist**: Tracks users, chat IDs, and user settings seamlessly.
-- **Flood Control Queue**: Custom semaphore and async queue handling to prevent `FloodWaitError` during viral moments.
-- **Quality fallback**: Tries 1080p -> 720p -> 480p -> 360p automatically (on traditional pipeline).
+- **Cancel button**: Inline button to abort an in-progress download at the next checkpoint.
+- **Telegram-side caching**: Uploads each video once to a storage group and re-forwards on repeat requests. Firestore holds per-source cache buckets — `get`, `exp`, `exphd`, `dw`.
+- **Persistent DB via Firebase Firestore**: Tracks users, chat IDs, and each user's selected mode.
+- **Flood Control Queue**: Custom semaphore and async queue handling to survive `FloodWaitError` during viral moments.
+- **Quality fallback**: Tries 1080p -> 720p -> 480p -> 360p automatically (on the traditional pipeline).
 
 ---
 
-## Flow Architecture
+## Architecture
 
-```text
-       [ User ] --(TeraBox URL)--> [ Telegram Bot (main.py) ]
-                                            |
-                            (Route based on User Selected Mode)
-                          /                                     \
-               [ Traditional Mode ]                     [ Experimental Mode ]
-              (telegram_logic/terabox_trad.py)         (telegram_logic/terabox_exp.py)
-                /                  \                     /                   \
-         [ Cache Hit ]        [ TeraBox API ]     [ Cache Hit ]     [ Headless Chrome Pool ]
-        (caching.py)         (terabox/public_api)                    (teraboxDL/terabox_dl.py)
-              |                     |                                          |
-              |            [ TS Chunk Downloader ]                [ Video Extraction Pipeline ]
-              |                     |                                          |
-              \            [ FFMPEG TS Remuxer ]                               |
-               \                    |                                         /
-                \                   |                                        /
-                 \---------- [ Telegram Upload ] ---------------------------/
-                         (progress_callbacks.py)
-                                    |
-                       [ Storage Group & Cache DB ]
-                      (telegram_logic/database.py)
+### 1. Command structure
+
+Every incoming update first passes through `global_tracker` (records the user in Firestore), then splits on whether the text is a slash command or a plain message.
+
+```mermaid
+graph TD
+    U["User / Group chat"] --> TR["global_tracker<br/>(track_user → Firestore)"]
+    TR --> R{"text starts with '/'?"}
+
+    R -->|"yes"| CMDS["Command handlers<br/>(telegram_logic/commands/*)"]
+    R -->|"no"| PLAIN["handle_message<br/>(mode-based routing)"]
+
+    CMDS --> S["/start — welcome + help"]
+    CMDS --> EXP["/exp url — TeraBox (fast)"]
+    CMDS --> EXPHD["/exphd url — TeraBox (HD)"]
+    CMDS --> GET["/get url — TeraBox (traditional)"]
+    CMDS --> DW["/dw url — Diskwala"]
+    CMDS --> RND["/random — random cached video"]
+    CMDS --> SET["/settings — switch default mode"]
+    CMDS --> OP["/op msg — feedback to admin"]
+    CMDS --> REC["/recent — admin only"]
+    CMDS --> BRD["/broadcast — admin only"]
+```
+
+### 2. Plain-message routing (conditional logic)
+
+For a message with no command, the bot looks up the user's mode and picks the matching URL matcher. If the expected link type is absent but the *other* type is present, it replies with a hint instead of ignoring the message.
+
+```mermaid
+flowchart TD
+    P["Plain message (no slash)"] --> MODE{"get_user_mode(chat_id)"}
+
+    MODE -->|"get"| GS["extract_all_surls()<br/>(legacy TeraBox regex)"]
+    MODE -->|"exp"| ES["extract_all_terabox_url_exp()"]
+    MODE -->|"exphd"| EHS["extract_all_terabox_url_exp()"]
+    MODE -->|"dw"| DS["extract_all_diskwala_urls()"]
+
+    GS -->|"TeraBox link found"| GP["process_terabox()<br/>traditional pipeline"]
+    ES -->|"TeraBox link found"| EP["process_terabox_experimental()"]
+    EHS -->|"TeraBox link found"| EHP["process_terabox_experimental(is_hd=True)"]
+    DS -->|"Diskwala link found"| DP["process_diskwala()"]
+
+    GS -->|"none, but Diskwala link present"| H1["Hint: use /dw or switch mode to dw"]
+    ES -->|"none, but Diskwala link present"| H1
+    EHS -->|"none, but Diskwala link present"| H1
+    DS -->|"none, but TeraBox link present"| H2["Hint: use /exp,/exphd,/get or switch mode"]
+
+    GS -->|"nothing relevant"| IGN["silently ignore"]
+    ES --> IGN
+    EHS --> IGN
+    DS --> IGN
+```
+
+> The same cross-type hint logic is repeated inside the explicit command handlers — e.g. `/dw <terabox-link>` points you at `/exp`, and `/exp <diskwala-link>` points you at `/dw`.
+
+### 3. Low-level download pipeline
+
+`/exp`, `/exphd` and `/dw` share one pipeline (in `terabox_exp.py` / `diskwala.py`), differing only in the **metadata source**. `/get` follows an analogous path with the traditional chunk collector. All Telegram sends flow through the flood-aware queue, and every phase honours the inline **Cancel** button via a `threading.Event`.
+
+```mermaid
+flowchart TD
+    IN["process_* (event, url)"] --> FL{"flood cooldown active?"}
+    FL -->|"yes"| QN["queue task + notify user (~N s)"]
+    FL -->|"no"| SEM["acquire semaphore (limit 20)"]
+
+    SEM --> REG["register cancel_event in active_tasks<br/>render ❌ Cancel button"]
+    REG --> CACHE{"search_in_cache(key, mode)"}
+    CACHE -->|"hit"| FWD["re-forward cached video<br/>from storage group"] --> DONE["delete status message"]
+    CACHE -->|"miss"| META["fetch metadata (in worker thread)"]
+
+    META -->|"exp / exphd"| M1["get_video_info()<br/>TeraBox scraper proxy"]
+    META -->|"dw"| M2["get_diskwala_info()<br/>Diskwala scraper proxy"]
+
+    M1 --> DL["download_terabox_file_experimental()<br/>multipart / HLS+ffmpeg / direct"]
+    M2 --> DL
+
+    DL --> PRE["_pre_upload_file()<br/>upload bytes once → InputFile handle"]
+    PRE --> ST{"STORAGE_GROUP_ID set?"}
+    ST -->|"yes"| UP["_upload_to_storage()<br/>+ add_to_cache(key, msg_id, mode)"]
+    ST -->|"no"| SEND
+    UP --> SEND["send_file to user<br/>(caption: name, size, timings)"]
+    SEND --> CLEAN["delete local temp files"] --> DONE
+
+    REG -.->|"user taps Cancel"| CX["cancel_event.set()<br/>→ abort at next checkpoint"]
 ```
 
 ---
@@ -54,40 +120,49 @@ Downloads full-length videos from TeraBox by reconstructing them from HLS stream
 ## Project Structure
 
 ```text
-main.py                        # Entry point, FastAPI wrapper, and bot command registration
+main.py                        # Entry point, FastAPI wrapper, global tracker, mode routing, command registration
 .env                           # Secrets (not committed)
-Dockerfile                     # Docker container configuration
+Dockerfile / docker-compose.yml  # Container configuration
 requirements.txt               # Python package dependencies
-apt.txt                        # OS-level dependencies (ffmpeg, chromium, etc.)
+apt.txt                        # OS-level dependencies (ffmpeg, etc.)
 
 telegram_logic/
-  bot.py                       # Helper functions for bot components and core bot setup
-  caching.py                   # Thread-safe local cache (surl -> message ID)
-  database.py                  # User activity and mode tracking mapped via GitHub Gist
-  helpers.py                   # URL extraction, size/duration formatting
-  progress_callbacks.py        # Live progress messages editing during download & upload
-  queue.py                     # Custom task queue logic handling API flood blocks gracefully
-  terabox_trad.py              # Traditional download pipeline integration
-  terabox_exp.py               # Experimental concurrent extractor pipeline integration
+  bot.py                       # Telethon client + shared upload/cache/cancel helpers
+  helpers.py                   # URL matchers (TeraBox legacy + experimental, Diskwala), size/duration formatting
+  progress_callbacks.py        # Live progress-message editing during download & upload
+  queue.py                     # Semaphore + flood-wait queue
+  terabox_trad.py              # Traditional (/get) pipeline
+  terabox_exp.py               # Experimental (/exp, /exphd) pipeline
+  diskwala.py                  # Diskwala (/dw) pipeline
   commands/                    # Individual Telegram command handlers
-    start.py                   # /start handler
-    get.py                     # /get <url> handler
-    random.py                  # /random handler
-    recent.py                  # /recent handler (Admin)
-    broadcast.py               # /broadcast handler (Admin)
-    settings.py                # /settings handler (User Download Modes)
-    experimental.py            # /exp and /exphd handlers
+    start.py                   # /start
+    get.py                     # /get <url>
+    experimental.py            # /exp and /exphd <url>
+    diskwala.py                # /dw <url>
+    random.py                  # /random
+    settings.py                # /settings (download-mode switch)
+    opinion.py                 # /op <msg> (feedback to admin)
     cancel_download.py         # Inline "Cancel" callback handler
-    info.py                    # /info handler
+    recent.py                  # /recent (Admin)
+    broadcast.py               # /broadcast (Admin)
 
-terabox/                       # Traditional API approach
+terabox/                       # Traditional (/get) API approach
   public_api.py                # Public interface for traditional pipeline
   core_pipeline.py             # Internal extraction, chunk discovery, ts download
   internal_helpers.py          # Shared utilities and custom exceptions
 
-teraboxDL/                     # Next-Gen Extractor approach
-  terabox_dl.py                # Headless chromium pool for concurrent metadata extracting
-  public_api.py                # Interface for headless requests
+teraboxDL/                     # Experimental (/exp, /exphd) extractor
+  terabox_dl.py                # Metadata via scraper proxy (get_video_info)
+  public_api.py                # download_terabox_file_experimental (concurrent multipart downloader)
+  stream_downloader.py         # HLS / direct stream downloader + ffmpeg remux
+
+diskwalaDL/                    # Diskwala (/dw) extractor
+  public_api.py                # Diskwala proxy client + URL helpers (get_diskwala_info)
+
+firebase_db/                   # Firebase Firestore persistence
+  db.py                        # Firestore client initialisation
+  users.py                     # User tracking + per-user mode (get/exp/exphd/dw)
+  cache.py                     # surl -> message_id cache buckets (get/exp/exphd/dw)
 ```
 
 ---
@@ -97,8 +172,9 @@ teraboxDL/                     # Next-Gen Extractor approach
 ### 1. Prerequisites
 
 - Python 3.11+
-- `ffmpeg` available on `PATH` (used for `.ts` -> `.mp4` conversion)
-- `chromium` or Google Chrome installed on the host (for headless pool processing)
+- `ffmpeg` available on `PATH` (used to remux HLS `.ts` segments into `.mp4`)
+- A Firebase project with Firestore enabled (service-account credentials)
+- Access to the TeraBox and Diskwala scraper proxies (URLs + Diskwala API key)
 
 ### 2. Install dependencies
 
@@ -114,17 +190,21 @@ Create a `.env` file in the project root:
 BOT_TOKEN=your_telegram_bot_token
 APP_ID=your_telegram_app_id
 API_HASH=your_telegram_api_hash
-STORAGE_GROUP_ID=-1001234567890         # the numeric ID of a private group/-channel
-ADMIN_ID=12345678                       # Your user ID to access /broadcast and /recent
+STORAGE_GROUP_ID=-1001234567890         # numeric ID of a private storage supergroup
+ADMIN_ID=12345678                       # your user ID to access /broadcast and /recent
 
-# GitHub Gist DB
-GIST_ID=your_github_gist_hash
-GITHUB_TOKEN=your_github_personal_access_token
+# Firebase Firestore (service-account JSON as a single-line string)
+FIREBASE_SECRETS={"type":"service_account", ... }
 
-# Experimental Headless Browser Settings
-CHROME_POOL_SIZE=3
+# Experimental (/exp, /exphd) scraper proxy
+THIRD_PARTY_TERABOXDL_URL=https://www.teraboxdl.site/
+PROXY_URL=http://<proxy-host>/v1
 
-# Traditional Cookies (Netscape string format)
+# Diskwala (/dw) scraper proxy
+DISKWALA_PROXY_URL=http://<proxy-host>/video
+DISKWALA_API_KEY=your_diskwala_api_key  # sent as the x-api-key request header
+
+# Traditional (/get) cookies (browser Cookie header string)
 COOKIES1=browserid=...; TSID=...
 COOKIES2=...
 ```
@@ -132,8 +212,10 @@ COOKIES2=...
 - `BOT_TOKEN` — from [@BotFather](https://t.me/BotFather)
 - `APP_ID` / `API_HASH` — from [my.telegram.org](https://my.telegram.org)
 - `STORAGE_GROUP_ID` — must be a supergroup ID (starts with `-100`). The bot must be admin.
-- `GIST_ID` & `GITHUB_TOKEN` — to persist application configurations and users automatically on GitHub.
-- `CHROME_POOL_SIZE` — max amount of concurrent Chromium tasks to keep memory in check.
+- `FIREBASE_SECRETS` — the Firestore service-account JSON, collapsed to one line; persists users, modes, and the video cache.
+- `THIRD_PARTY_TERABOXDL_URL` / `PROXY_URL` — endpoints the experimental (`/exp`, `/exphd`) pipeline uses to resolve TeraBox links.
+- `DISKWALA_PROXY_URL` / `DISKWALA_API_KEY` — the Diskwala (`/dw`) proxy endpoint and its `x-api-key`.
+- `COOKIES1..N` — TeraBox session cookies for the traditional (`/get`) pipeline.
 
 ### 4. Add cookies (For Traditional Mode)
 
@@ -160,8 +242,8 @@ docker run -d --env-file .env terabox-bot
 
 1. **Telegram File Size Limit**: Telegram restricts standard bot file uploads to **50 MB** and strictly restricts using local API servers to **2 GB**. Any resulting video chunk transcoded to more than maximum limits will fail.
 2. **Rate Limits & API Bans**: TeraBox API rate-limits aggressively on the traditional (`/get`) approach. We use budget limits to avoid IP bans but this may leave >1 hour videos missing a sub-segment (skip ~4 minutes).
-3. **RAM & CPU Overhead**: The experimental (`/exp`) module uses a Headless Chrome pool. Running several concurrent instances requires at least `1GB` of free RAM and moderate CPU power. Scale `CHROME_POOL_SIZE` down if deployed on a low-end VPS.
-4. **Link Expirations & CSRF Tokens**: Token scraping occasionally breaks when TeraBox updates its CDN logic, necessitating pipeline tweaks.
+3. **Concurrency & throughput**: The experimental (`/exp`, `/exphd`) and Diskwala (`/dw`) pipelines resolve links through external scraper proxies and download via concurrent multipart connections. A global semaphore (limit 20) plus the flood-wait queue bound how many downloads/uploads run at once; downloads are still disk- and bandwidth-bound on a low-end VPS.
+4. **Proxy / link expiry**: The scraper proxies and the direct CDN links they return are time-limited. Resolution can break when TeraBox or Diskwala change their backends, necessitating proxy-side tweaks.
 
 ---
 

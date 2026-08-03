@@ -8,6 +8,38 @@ TERA_URL_RE = re.compile(
     re.IGNORECASE,
 )
 
+# ── Experimental modes (/exp, /exphd) ────────────────────────────────────────────
+# The experimental proxy resolves many more TeraBox mirror domains and accepts
+# flexible path shapes, so /exp and /exphd use their own, broader matcher.
+#
+# Supported shapes:
+#   {baseURL}/<something>/{SURL}          e.g. https://terabox.com/s/1abc
+#   {baseURL}/{SURL}                      e.g. https://terabox.com/1abc
+#   {baseURL}/sharing/link?...surl=1abc   (query-param form, kept for compat)
+_TERABOX_EXP_DOMAINS = (
+    "terabox.com", "1024terabox.com", "teraboxapp.com", "freeterabox.com",
+    "terabox.app", "terabox.fun", "4funbox.co", "4funbox.com",
+    "mirrobox.com", "nephobox.com", "1024tera.com", "momerybox.com",
+    "tibibox.com",
+)
+# Longest-first so e.g. "4funbox.com" is preferred over the "4funbox.co" prefix.
+_TERABOX_EXP_DOMAIN_ALT = "|".join(
+    d.replace(".", r"\.") for d in sorted(_TERABOX_EXP_DOMAINS, key=len, reverse=True)
+)
+
+TERA_EXP_URL_RE = re.compile(
+    r"https?://(?:www\.)?(?:" + _TERABOX_EXP_DOMAIN_ALT + r")"
+    r"(?:"
+    # Query-param form: /sharing/link?...surl=<surl>
+    r"/(?:sharing/link|wap/share/filelist|share/link)\?[^\s#]*?surl=1?(?P<surl_param>[A-Za-z0-9_-]+)"
+    r"|"
+    # Path form: optional single intermediate segment, then the SURL.
+    # A leading "1" of the SURL is not captured, matching legacy behaviour.
+    r"(?:/[A-Za-z0-9_.%-]+)?/1?(?P<surl_path>[A-Za-z0-9_-]+)"
+    r")",
+    re.IGNORECASE,
+)
+
 # — Helpers ————————————————————————————————————————————————————————————————————————
 
 def extract_surl(text: str) -> str | None:
@@ -22,6 +54,26 @@ def extract_all_terabox_url(text: str) -> list[str]:
     seen: set[str] = set()
     urls: list[str] = []
     for m in TERA_URL_RE.finditer(text):
+        url = m.group(0)
+        if url and url not in seen:
+            seen.add(url)
+            urls.append(url)
+    return urls
+
+
+def extract_surl_exp(text: str) -> str | None:
+    """Extract the first SURL from an experimental-mode (/exp, /exphd) TeraBox URL."""
+    m = TERA_EXP_URL_RE.search(text)
+    if m:
+        return m.group("surl_path") or m.group("surl_param")
+    return None
+
+
+def extract_all_terabox_url_exp(text: str) -> list[str]:
+    """Extract all unique TeraBox share URLs supported by /exp and /exphd."""
+    seen: set[str] = set()
+    urls: list[str] = []
+    for m in TERA_EXP_URL_RE.finditer(text):
         url = m.group(0)
         if url and url not in seen:
             seen.add(url)
