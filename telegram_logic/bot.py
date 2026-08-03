@@ -6,7 +6,7 @@ import logging
 from telethon import TelegramClient, Button
 from telethon.errors import FloodWaitError
 
-from .caching import search_in_cache
+from firebase_db.cache import search_in_cache
 
 from dotenv import load_dotenv
 load_dotenv()

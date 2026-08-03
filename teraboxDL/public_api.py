@@ -9,6 +9,7 @@ import shutil
 from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from terabox.internal_helpers import _safe_filename, TeraBoxError, CancelledError
+from teraboxDL.stream_downloader import is_streaming_manifest, download_from_stream_url
 
 STORAGE_DIR = "storage"
 CHUNK_SIZE = 1 * 1024 * 1024  # 1 MB per read chunk within each part
@@ -66,7 +67,12 @@ def download_terabox_file_experimental(
     mp4_path = os.path.join(STORAGE_DIR, safe if safe.lower().endswith(".mp4") else safe + ".mp4")
    
     try:
-        _download_video(download_url, mp4_path, cancel_event, progress_callback)
+        if is_streaming_manifest(download_url):
+            # Use ffmpeg-based stream downloader for HLS/DASH manifests
+            print(f"    [Stream] Detected HLS/DASH manifest, using ffmpeg...")
+            download_from_stream_url(download_url, mp4_path, cancel_event, progress_callback)
+        else:
+            _download_video(download_url, mp4_path, cancel_event, progress_callback)
 
         print()  # newline after progress
         print(f"    Download Completed! {mp4_path}")

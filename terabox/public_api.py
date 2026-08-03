@@ -2,8 +2,8 @@ import threading
 import os
 import requests
 import shutil
-from .internal_helpers import _safe_filename, BYTES_PER_MB
-from .core_pipeline import load_session, get_js_token, get_share_info, discover_all_hls_chunks, download_all_chunks, concatenate_chunks_ffmpeg
+from .internal_helpers import _safe_filename, BYTES_PER_MB, _headers
+from .core_pipeline import load_session, get_js_token, get_share_info, discover_all_hls_chunks, download_all_chunks, concatenate_chunks_ffmpeg, build_streaming_url
 from .internal_helpers import TeraBoxError, CancelledError
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -80,13 +80,40 @@ def download_terabox_file(
     print(f"  [1] {filename} ({size / BYTES_PER_MB:.1f} MB)")
 
     try:
-        print(f"    Using quality {QUALITY}...")
+        working_quality = None
+        qualities_to_try = [
+            "M3U8_AUTO_1080", "M3U8_AUTO_720", 
+            "M3U8_AUTO_480", "M3U8_AUTO_360", 
+            "M3U8_720P", "M3U8_480P", "M3U8_360P"
+        ]
+        
+        for q in qualities_to_try:
+            print(f"    Checking quality: {q}...", end="", flush=True)
+            url = build_streaming_url(
+                prepared["shareid"], prepared["uk"], prepared["sign"], 
+                prepared["timestamp"], prepared["fs_id"], q
+            )
+            try:
+                r = session.get(url, headers=_headers(session, surl), timeout=30)
+                if r.text.strip().startswith("#EXTM3U"):
+                    working_quality = q
+                    print(" ✓ Works!")
+                    break
+                else:
+                    print(" ✗ Failed")
+            except Exception as e:
+                print(f" ✗ Error: {e}")
+                
+        if not working_quality:
+            raise TeraBoxError("Could not find any available streaming quality for this video.")
+
+        print(f"    Using quality {working_quality} for download...")
         
         # Step 1: Scan for all distinct TS chunks spanning the video
         chunks = discover_all_hls_chunks(
             session, prepared["shareid"], prepared["uk"], 
             prepared["sign"], prepared["timestamp"], prepared["fs_id"], 
-            QUALITY, surl=surl, cancel_event=cancel_event
+            working_quality, surl=surl, cancel_event=cancel_event
         )
         
         # Step 2: Download every chunk

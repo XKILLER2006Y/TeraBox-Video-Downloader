@@ -2,11 +2,9 @@ import os
 import requests
 import re
 import time
-import json
 import subprocess
 import threading
 import random
-import shutil
 from .internal_helpers import BASE_URL, _headers, _logid, TeraBoxError, CancelledError, BYTES_PER_MB, CookiesList
 from urllib.parse import unquote, urlparse, urlunparse, urlencode, parse_qs
 
