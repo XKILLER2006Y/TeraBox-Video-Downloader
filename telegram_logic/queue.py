@@ -33,11 +33,12 @@ class MessageQueue:
             self._monitor_task = asyncio.create_task(self._queue_monitor())
 
     async def _queue_monitor(self) -> None:
-        """Background task: periodically logs the queue size."""
+        """Background task: periodically logs a non-empty queue size."""
         while True:
             if self._queue is not None:
                 qsize = self._queue.qsize()
-                log.info(f"[Queue Monitor] Items in queue: {qsize}")
+                if qsize > 0:
+                    log.info(f"[Queue Monitor] Items in queue: {qsize}")
             await asyncio.sleep(3)
 
     async def put(self, process_callable, event, url: str, *args):
