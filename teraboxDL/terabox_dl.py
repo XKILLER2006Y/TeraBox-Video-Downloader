@@ -1,4 +1,6 @@
 import os
+import time
+import random
 import logging
 import requests
 
@@ -21,7 +23,11 @@ def _get_video_metadata(terabox_url: str) -> dict:
         "post_json_body": f'{{"url": "{terabox_url}"}}'
     }
 
-    log.info("Retrieving video metadata from proxy URL")
+    # Random jitter delay to stagger concurrent requests and avoid shadow banning
+    delay = random.uniform(0.1, 2.5)
+    log.info(f"Retrieving video metadata from proxy URL (jitter delay: {delay:.2f}s)")
+    time.sleep(delay)
+
     response = requests.post(PROXY_URL, json=payload, timeout=600)
 
     if response.status_code != 200:
@@ -76,7 +82,7 @@ def get_video_info(terabox_url: str, is_hd: bool) -> dict:
             "download_url": file_info.get("direct_link", ""),
         }
     else:
-        download_url = file_info.get("stream_download_url", "")
+        download_url = file_info.get("stream_url", "")
         new_file_size = _get_file_size_bytes(download_url)
 
         return {

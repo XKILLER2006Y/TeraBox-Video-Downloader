@@ -6,4 +6,6 @@ __pycache__
 .env
 terabox_bot.session 
 terabox_bot.session-journal
+firebase_secrets.json
+fb_secrets.json
   

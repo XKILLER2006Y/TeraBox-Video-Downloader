@@ -1,10 +1,10 @@
 from telethon import events, Button
 import logging
 from ..bot import bot
-from ..database import set_user_mode, get_user_mode
+from firebase_db.users import set_user_mode, get_user_mode
 
 log = logging.getLogger(__name__)
-AVAILABLE_MODES = ["get", "exp", "exphd"]
+AVAILABLE_MODES = ["get", "exp", "exphd", "dw"]
 
 @bot.on(events.NewMessage(pattern="/settings"))
 async def cmd_settings(event):
@@ -32,7 +32,15 @@ async def cmd_settings(event):
             f"\n🆔 **Private Chat ID:** `{chat_id}`"
         )
 
-    current_mode = get_user_mode(chat_id)
+    try:
+        current_mode = get_user_mode(chat_id)
+    except Exception as e:
+        log.error(f"[/settings] DB error fetching mode for chat {chat_id}: {e}")
+        await event.respond(
+            "⚠️ **Database error** — could not load your settings.\n"
+            "Please try again in a moment."
+        )
+        raise events.StopPropagation
 
     available_modes = AVAILABLE_MODES.copy()
     if current_mode in available_modes:
@@ -56,13 +64,26 @@ async def cb_set_mode(event):
     chat_id = event.chat_id
     
     log.info(f"Mode Switch to {mode}, for user {chat_id}")
-    set_user_mode(chat_id, mode)
-    
+
+    try:
+        success = set_user_mode(chat_id, mode)
+    except Exception as e:
+        log.error(f"[cb_set_mode] Unexpected DB error for chat {chat_id}: {e}")
+        success = False
+
+    if not success:
+        await event.respond(
+            "⚠️ **Database error** — could not save your mode setting.\n"
+            "Please try again in a moment."
+        )
+        raise events.StopPropagation
+
     await event.delete()  
     await event.respond(
         f"✅ **Mode switched successfully to [{mode}]**\n\n"
-        f"➡️ **get** : Most reliable & fast\n"
-        f"➡️ **exp** : Backup for `get`[SLOW]\n"
-        f"➡️ **exphd** : For HD Videos [Very SLOW]"
+        f"➡️ **get** : Unstable [Use for small files]\n"
+        f"➡️ **exp** : Reliable & Fast [Recommended]\n"
+        f"➡️ **exphd** : For HD Videos [Slow]\n"
+        f"➡️ **dw** : Download Diskwala videos"
     )
     raise events.StopPropagation

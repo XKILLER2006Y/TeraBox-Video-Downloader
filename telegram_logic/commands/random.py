@@ -4,7 +4,7 @@ import random
 import logging
 from telethon import events
 from ..bot import bot
-from ..caching import get_cache_for_random
+from firebase_db.cache import get_cache_for_random
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -16,7 +16,16 @@ log = logging.getLogger(__name__)
 async def cmd_random(event):
     log.info(f"Received /random command from chat {event.chat_id}")
 
-    data = await asyncio.to_thread(get_cache_for_random)
+    try:
+        data = await asyncio.to_thread(get_cache_for_random)
+    except Exception as e:
+        log.error(f"[/random] DB error fetching cache: {e}")
+        await event.respond(
+            "⚠️ **Database error** — could not fetch the video cache.\n"
+            "Please try again in a moment."
+        )
+        raise events.StopPropagation
+
     if not data:
         await event.respond("📭 No videos yet. Send a TeraBox link first!")
         raise events.StopPropagation

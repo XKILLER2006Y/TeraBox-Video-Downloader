@@ -1,0 +1,32 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual environments
+venv/
+.venv/
+
+# Git
+.git/
+.gitignore
+
+# Environment & secrets - NEVER include in image   
+.env
+firebase_secrets.json
+fb_secrets.json
+
+# Telegram session files
+terabox_bot.session
+terabox_bot.session-journal
+
+# Runtime data / downloads (large, not needed in image)
+test_downloads/
+videos/
+storage/
+cache.json
+users.json
+
+# Dev/migration scripts
+migrate.py
+apt.txt

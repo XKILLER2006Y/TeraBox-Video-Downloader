@@ -8,7 +8,7 @@ from telethon.errors import FloodWaitError
 
 from .bot import bot, _find_cached_video, _pre_upload_file, _upload_to_storage, _cancellable, terabox_queue, _safe_send, active_tasks, STORAGE_GROUP_ID
 from .helpers import format_size, format_duration
-from .caching import add_to_cache
+from firebase_db.cache import add_to_cache
 from .progress_callbacks import make_download_progress_cb, make_upload_progress_cb
 
 from terabox.public_api import prepare_terabox_link, download_terabox_file, TeraBoxError, CancelledError
@@ -64,7 +64,7 @@ async def helper(event, surl: str) -> None:
     cancel_event = threading.Event()
     active_tasks[task_key] = cancel_event
 
-    cancel_btn = [[Button.inline("❌ Cancel", data="cancel_download")]]
+    cancel_btn = [[Button.inline("❌ Cancel", data=f"cancel:{surl}")]]
 
     def _cleanup_files(*paths):
         """Remove temp/downloaded files from disk."""
@@ -109,12 +109,12 @@ async def helper(event, surl: str) -> None:
         return
     except TeraBoxError as e:
         log.error(f"Prepare error for surl={surl}: {e}")
-        await _safe_send(status.edit, f"❌ Error: {e}")
+        await _safe_send(status.edit, f"❌ Error: {e}\n\nYou can try different *mode* to download.\nSwitch *mode* from /settings")
         active_tasks.pop(task_key, None)
         return
     except Exception as e:
         log.exception(f"Unexpected prepare error for surl={surl}")
-        await _safe_send(status.edit, f"❌ Unexpected error: {e}")
+        await _safe_send(status.edit, f"❌ Unexpected error: {e}\n\nYou can try different *mode* to download.\nSwitch *mode* from /settings")
         active_tasks.pop(task_key, None)
         return
 
@@ -144,12 +144,12 @@ async def helper(event, surl: str) -> None:
         return
     except TeraBoxError as e:
         log.error(f"Download error for surl={surl}: {e}")
-        await _safe_send(status.edit, f"❌ Download failed: {e}")
+        await _safe_send(status.edit, f"❌ Download failed: {e}\n\nYou can try different *mode* to download.\nSwitch *mode* from /settings")
         active_tasks.pop(task_key, None)
         return
     except Exception as e:
         log.exception(f"Unexpected download error for surl={surl}")
-        await _safe_send(status.edit, f"❌ Download failed: {e}")
+        await _safe_send(status.edit, f"❌ Download failed: {e}\n\nYou can try different *mode* to download.\nSwitch *mode* from /settings")
         active_tasks.pop(task_key, None)
         return
     dl_time = time.time() - dl_start
@@ -269,7 +269,7 @@ async def helper(event, surl: str) -> None:
         except Exception as e:
             log.error(f"Direct upload failed for surl={surl}: {e}")
             _cleanup_files(filepath, os.path.splitext(filepath)[0] + ".ts")
-            await _safe_send(status.edit, f"❌ Upload failed: {e}")
+            await _safe_send(status.edit, f"❌ Upload failed: {e}\n\nYou can try different *mode* to download.\nSwitch *mode* from /settings")
             active_tasks.pop(task_key, None)
             return
 
