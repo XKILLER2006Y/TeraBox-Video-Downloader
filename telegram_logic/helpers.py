@@ -1,4 +1,13 @@
+import os
 import re
+
+def env_int(name: str, default: int = 0) -> int:
+    """Parse an int env var; empty/missing/invalid values fall back to default."""
+    raw = os.environ.get(name, "")
+    try:
+        return int(raw.strip() or default)
+    except (ValueError, TypeError):
+        return default
 
 # Regex to match TeraBox share URLs and extract the SURL
 TERA_URL_RE = re.compile(

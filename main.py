@@ -12,7 +12,7 @@ from telegram_logic.bot import bot
 from telegram_logic.terabox_trad import process_terabox
 from telegram_logic.terabox_exp import process_terabox_experimental
 from telegram_logic.diskwala import process_diskwala
-from telegram_logic.helpers import extract_all_surls, extract_all_terabox_url_exp
+from telegram_logic.helpers import extract_all_surls, extract_all_terabox_url_exp, env_int
 from diskwalaDL.public_api import extract_all_diskwala_urls
 from firebase_db.users import track_user, get_user_mode
 
@@ -43,9 +43,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
-APP_ID = int(os.environ.get("APP_ID", "0"))
+APP_ID = env_int("APP_ID")
 API_HASH = os.environ.get("API_HASH", "")
-STORAGE_GROUP_ID = int(os.environ.get("STORAGE_GROUP_ID", "0"))
+STORAGE_GROUP_ID = env_int("STORAGE_GROUP_ID")
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s", level=logging.INFO,
@@ -159,7 +159,7 @@ async def run_bot() -> None:
         commands=default_commands
     ))
 
-    admin_id = int(os.environ.get("ADMIN_ID", "0"))
+    admin_id = env_int("ADMIN_ID")
     if admin_id:
         try:
             admin_peer = await bot.get_input_entity(admin_id)
@@ -204,4 +204,4 @@ async def ping():
     return "pong"
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 3000)))
+    uvicorn.run(app, host="0.0.0.0", port=env_int("PORT", 3000))

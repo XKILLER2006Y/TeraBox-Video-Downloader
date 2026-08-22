@@ -1,8 +1,9 @@
 import os
-import time 
+import time
 import threading
 import asyncio
 import logging
+import tempfile
 from telethon import Button
 from telethon.errors import FloodWaitError
 
@@ -64,6 +65,13 @@ async def helper(event, terabox_url: str, is_hd: bool) -> None:
     task_key = (chat_id, surl)
     total_start = time.time()
 
+    # Reject duplicate concurrent requests for the same link from this chat —
+    # a second registration would orphan the first task's cancel event.
+    existing = active_tasks.get(task_key)
+    if existing is not None and not existing.is_set():
+        await _safe_send(event.respond, f"⚠️ `{surl}` is already being processed. Use the ❌ button on that message to cancel it first.")
+        return
+
     cancel_event = threading.Event()
     active_tasks[task_key] = cancel_event
 
@@ -78,6 +86,14 @@ async def helper(event, terabox_url: str, is_hd: bool) -> None:
                     log.info(f"Cleaned up file: {p}")
                 except Exception as e:
                     log.warning(f"Could not clean up {p}: {e}")
+
+    # Temp artifacts for this task: downloaded file, remux leftover, local M3U8
+    m3u8_tmp = os.path.join(tempfile.gettempdir(), f"terabox_{surl}.m3u8")
+
+    def _cleanup_all(filepath=None):
+        paths = [filepath, os.path.splitext(filepath)[0] + ".ts" if filepath else None,
+                 m3u8_tmp]
+        _cleanup_files(*paths)
 
     try:
         # — Phase 1: Cache lookup ——————————————————————————————————————————————
@@ -145,7 +161,7 @@ async def helper(event, terabox_url: str, is_hd: bool) -> None:
         dl_time = time.time() - dl_start
 
         if cancel_event.is_set():
-            _cleanup_files(filepath, os.path.splitext(filepath)[0] + ".ts")
+            _cleanup_all(filepath)
             await _safe_send(status.edit, "🚫 Cancelled.")
             return
 
@@ -154,7 +170,7 @@ async def helper(event, terabox_url: str, is_hd: bool) -> None:
 
         # — Phase 4: Upload to storage group (cache) ———————————————————————————
         if cancel_event.is_set():
-            _cleanup_files(filepath, os.path.splitext(filepath)[0] + ".ts")
+            _cleanup_all(filepath)
             await _safe_send(status.edit, "🚫 Cancelled.")
             return
 
@@ -172,17 +188,21 @@ async def helper(event, terabox_url: str, is_hd: bool) -> None:
             try:
                 # Upload file bytes to Telegram ONCE → get reusable InputFile handle
                 input_file = await _cancellable(_pre_upload_file(filepath, progress_cb), cancel_event)
-                storage_msg = await _cancellable(_upload_to_storage(input_file, filename), cancel_event)
-                if storage_msg is not None:
-                    await asyncio.to_thread(add_to_cache, surl, storage_msg.id, user_mode)
+                try:
+                    storage_msg = await _cancellable(_upload_to_storage(input_file, filename), cancel_event)
+                    if storage_msg is not None:
+                        await asyncio.to_thread(add_to_cache, surl, storage_msg.id, user_mode)
+                except Exception as e:
+                    # Keep input_file — the handle is still valid for direct delivery
+                    log.error(f"Storage send failed (pre-upload kept) for surl={surl}: {e}")
             except asyncio.CancelledError:
                 log.info(f"Upload cancelled by user for surl={surl}")
-                _cleanup_files(filepath, os.path.splitext(filepath)[0] + ".ts")
+                _cleanup_all(filepath)
                 await _safe_send(status.edit, "🚫 Cancelled.")
                 return
             except Exception as e:
-                log.error(f"Storage upload failed for surl={surl}: {e}")
-                input_file = None  # clear so fallback re-uploads from disk
+                log.error(f"Pre-upload failed for surl={surl}: {e}")
+                input_file = None  # upload itself failed → fallback re-uploads from disk
                 # storage_msg stays None → fall back to direct upload below
 
         # — Phase 5: Deliver to user ———————————————————————————————————————————
@@ -252,22 +272,16 @@ async def helper(event, terabox_url: str, is_hd: bool) -> None:
                     pass
             except asyncio.CancelledError:
                 log.info(f"Direct upload cancelled by user for surl={surl}")
-                _cleanup_files(filepath, os.path.splitext(filepath)[0] + ".ts")
+                _cleanup_all(filepath)
                 await _safe_send(status.edit, "🚫 Cancelled.")
                 return
             except Exception as e:
                 log.error(f"Direct upload failed for surl={surl}: {e}")
-                _cleanup_files(filepath, os.path.splitext(filepath)[0] + ".ts")
+                _cleanup_all(filepath)
                 await _safe_send(status.edit, f"❌ Upload failed: {e}\n\nYou can try different *mode* to download.\nSwitch *mode* from /settings")
                 return
 
-        for f_path in (filepath, os.path.splitext(filepath)[0] + ".ts"):
-            if os.path.exists(f_path):
-                try:
-                    os.remove(f_path)
-                    log.info(f"Deleted local file: {f_path}")
-                except Exception as e:
-                    log.warning(f"Could not delete local file {f_path}: {e}")
+        _cleanup_all(filepath)
 
         try:
             await _safe_send(status.delete)

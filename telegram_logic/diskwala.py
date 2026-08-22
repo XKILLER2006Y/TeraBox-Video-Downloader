@@ -69,6 +69,13 @@ async def _dw_helper(event, diskwala_url: str) -> None:
     task_key = (chat_id, link_id)
     total_start = time.time()
 
+    # Reject duplicate concurrent requests for the same link from this chat —
+    # a second registration would orphan the first task's cancel event.
+    existing = active_tasks.get(task_key)
+    if existing is not None and not existing.is_set():
+        await _safe_send(event.respond, f"⚠️ `{link_id}` is already being processed. Use the ❌ button on that message to cancel it first.")
+        return
+
     cancel_event = threading.Event()
     active_tasks[task_key] = cancel_event
 
@@ -183,17 +190,21 @@ async def _dw_helper(event, diskwala_url: str) -> None:
             try:
                 # Upload file bytes to Telegram ONCE → get reusable InputFile handle
                 input_file = await _cancellable(_pre_upload_file(filepath, progress_cb), cancel_event)
-                storage_msg = await _cancellable(_upload_to_storage(input_file, filename), cancel_event)
-                if storage_msg is not None:
-                    await asyncio.to_thread(add_to_cache, link_id, storage_msg.id, user_mode)
+                try:
+                    storage_msg = await _cancellable(_upload_to_storage(input_file, filename), cancel_event)
+                    if storage_msg is not None:
+                        await asyncio.to_thread(add_to_cache, link_id, storage_msg.id, user_mode)
+                except Exception as e:
+                    # Keep input_file — the handle is still valid for direct delivery
+                    log.error(f"Storage send failed (pre-upload kept) for {link_id}: {e}")
             except asyncio.CancelledError:
                 log.info(f"Upload cancelled by user for {link_id}")
                 _cleanup_files(filepath, os.path.splitext(filepath)[0] + ".ts")
                 await _safe_send(status.edit, "🚫 Cancelled.")
                 return
             except Exception as e:
-                log.error(f"Storage upload failed for {link_id}: {e}")
-                input_file = None  # clear so fallback re-uploads from disk
+                log.error(f"Pre-upload failed for {link_id}: {e}")
+                input_file = None  # upload itself failed → fallback re-uploads from disk
                 # storage_msg stays None → fall back to direct upload below
 
         # — Phase 5: Deliver to user ———————————————————————————————————————————

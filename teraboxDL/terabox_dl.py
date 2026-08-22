@@ -333,15 +333,20 @@ def _get_video_metadata(terabox_url: str) -> dict:
 
 def _get_file_size_bytes(stream_download_url: str) -> int:
     try:
-        response = requests.head(stream_download_url, allow_redirects=True)
+        response = requests.head(
+            stream_download_url,
+            allow_redirects=True,
+            timeout=15,
+            headers={"User-Agent": random.choice(USER_AGENTS)},
+        )
         content_length = response.headers.get('Content-Length')
         if content_length is None:
             raise ValueError("Server did not provide Content-Length header.")
-        
+
         return int(content_length)
-    
+
     except Exception as e:
-        print(f"Error: {e}")
+        log.warning(f"HEAD size probe failed for {stream_download_url[:80]}: {e}")
         return 0
 
 
@@ -380,12 +385,10 @@ def get_video_info(terabox_url: str, is_hd: bool) -> dict:
         download_url = file_info.get("stream_url", "")
         # If stream_url is a local M3U8 file path, get its size; otherwise HEAD request
         if download_url and not download_url.startswith("http"):
-            # Local M3U8 playlist — estimate size from metadata; clean up temp file after use
+            # Local M3U8 playlist — size comes from share metadata.
+            # NOTE: the temp M3U8 must NOT be deleted here — the download
+            # pipeline still needs to read it. Pipelines clean it up.
             file_size = int(file_info.get("size", 0))
-            try:
-                os.remove(download_url)
-            except OSError:
-                pass
         elif download_url:
             file_size = _get_file_size_bytes(download_url)
         else:

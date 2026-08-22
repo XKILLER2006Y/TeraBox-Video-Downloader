@@ -14,6 +14,7 @@ load_dotenv()
 log = logging.getLogger(__name__)
 
 from .queue import MessageQueue
+from .helpers import env_int
 
 # — Concurrency & Flood-Wait Queue ————————————————————————————————————————————
 # We still need a semaphore because:
@@ -27,9 +28,9 @@ async def _safe_send(*args, **kwargs):
 
 # — Configuration —————————————————————————————————————————————————————————————
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
-APP_ID = int(os.environ.get("APP_ID", "0"))
+APP_ID = env_int("APP_ID")
 API_HASH = os.environ.get("API_HASH", "")
-STORAGE_GROUP_ID = int(os.environ.get("STORAGE_GROUP_ID", "0"))
+STORAGE_GROUP_ID = env_int("STORAGE_GROUP_ID")
 
 # — Active-task tracking (for cancel) ————————————————————————————————————————————
 active_tasks: dict[tuple[int, str], threading.Event] = {}

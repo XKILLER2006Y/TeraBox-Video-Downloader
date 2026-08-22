@@ -13,7 +13,7 @@ from firebase_db.users import get_all_users
 
 log = logging.getLogger(__name__)
 
-ADMIN_ID = int(os.environ.get("ADMIN_ID", "0"))
+ADMIN_ID = env_int("ADMIN_ID")
 
 
 async def _send_to(chat_id: int, reply_msg=None, text: str = None):

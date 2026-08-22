@@ -19,6 +19,7 @@ import os
 import re
 import json
 import time
+import threading
 import logging
 import asyncio
 import hashlib
@@ -255,7 +256,43 @@ def _pick_file_field(file_obj: dict, *keys, required=True, default=None):
     return default
 
 
-# ── Public API ───────────────────────────────────────────────────────────────
+# ── Auth loop thread ─────────────────────────────────────────────────────────
+# The Telethon client is bound to the event loop it first connects on.
+# Creating a new asyncio.run() loop per call rebinds futures across loops and
+# crashes on the second request. Solution: one dedicated background thread
+# owns a persistent loop forever; every auth call is submitted to it.
+
+_auth_loop: asyncio.AbstractEventLoop | None = None
+_auth_loop_lock = threading.Lock()
+
+# Mini App initData tokens stay valid for hours — cache to avoid a Telegram
+# roundtrip (RequestAppWebViewRequest) on every single resolution request.
+_token_cache: dict = {"token": "", "fetched_at": 0.0}
+_TOKEN_TTL_SECONDS = 3600  # 1 hour, conservative
+
+
+def _get_auth_loop() -> asyncio.AbstractEventLoop:
+    """Return the persistent background loop, starting its thread if needed."""
+    global _auth_loop
+    if _auth_loop is not None and _auth_loop.is_running():
+        return _auth_loop
+    with _auth_loop_lock:
+        if _auth_loop is None or not _auth_loop.is_running():
+
+            def _run_forever():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                global _auth_loop
+                _auth_loop = loop
+                loop.run_forever()
+
+            t = threading.Thread(target=_run_forever, daemon=True, name="diskwala-auth")
+            t.start()
+            # Wait for the loop to be published
+            while _auth_loop is None:
+                time.sleep(0.01)
+    return _auth_loop
+
 
 def get_diskwala_info_direct(diskwala_url: str) -> dict:
     """
@@ -268,23 +305,19 @@ def get_diskwala_info_direct(diskwala_url: str) -> dict:
     if not DISKWALA_SESSION:
         raise DiskwalaDirectError("SESSION not configured")
 
-    # Get auth token (sync wrapper around async Telethon)
+    # Get auth token via the dedicated auth-loop thread (cached with TTL)
     try:
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = None
-
-        if loop and loop.is_running():
-            # Inside an async context — run in a thread to avoid deadlocking the loop
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                auth_token = pool.submit(
-                    asyncio.run, _get_auth_token()
-                ).result(timeout=30)
+        now = time.monotonic()
+        if _token_cache["token"] and (now - _token_cache["fetched_at"]) < _TOKEN_TTL_SECONDS:
+            auth_token = _token_cache["token"]
         else:
-            # Sync context — just run it
-            auth_token = asyncio.run(_get_auth_token())
+            import concurrent.futures
+            fut = asyncio.run_coroutine_threadsafe(
+                _get_auth_token(), _get_auth_loop()
+            )
+            auth_token = fut.result(timeout=60)
+            _token_cache["token"] = auth_token
+            _token_cache["fetched_at"] = time.monotonic()
     except DiskwalaDirectError:
         raise
     except Exception as e:

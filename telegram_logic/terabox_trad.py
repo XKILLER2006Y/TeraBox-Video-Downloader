@@ -61,6 +61,13 @@ async def helper(event, surl: str) -> None:
     task_key = (chat_id, surl)
     total_start = time.time()
 
+    # Reject duplicate concurrent requests for the same link from this chat —
+    # a second registration would orphan the first task's cancel event.
+    existing = active_tasks.get(task_key)
+    if existing is not None and not existing.is_set():
+        await _safe_send(event.respond, f"⚠️ `{surl}` is already being processed. Use the ❌ button on that message to cancel it first.")
+        return
+
     cancel_event = threading.Event()
     active_tasks[task_key] = cancel_event
 

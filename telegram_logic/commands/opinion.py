@@ -5,7 +5,7 @@ from ..bot import bot
 
 log = logging.getLogger(__name__)
 
-ADMIN_ID = int(os.environ.get("ADMIN_ID", "0"))
+ADMIN_ID = env_int("ADMIN_ID")
 
 
 @bot.on(events.NewMessage(pattern=r"^/op(?:\s+([\s\S]+))?$"))

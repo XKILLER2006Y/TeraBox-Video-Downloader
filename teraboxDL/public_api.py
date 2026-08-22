@@ -126,46 +126,49 @@ def _download_part(
     session.headers["Referer"] = f"{parsed.scheme}://{parsed.netloc}/"
 
     headers = {"Range": f"bytes={byte_start}-{byte_end}"}
-    for attempt in range(4):
-        if cancel_event and cancel_event.is_set():
-            raise CancelledError("Download cancelled")
-        try:
-            r = session.get(download_url, headers=headers, stream=True, timeout=120)
-            r.raise_for_status()
-            with open(part_path, "wb") as f:
-                for chunk in r.iter_content(CHUNK_SIZE):
-                    if cancel_event and cancel_event.is_set():
-                        raise CancelledError("Download cancelled")
-                    f.write(chunk)
-                    with progress_lock:
-                        shared_progress[0] += len(chunk)
-                        done = shared_progress[0]
+    try:
+        for attempt in range(4):
+            if cancel_event and cancel_event.is_set():
+                raise CancelledError("Download cancelled")
+            try:
+                r = session.get(download_url, headers=headers, stream=True, timeout=120)
+                r.raise_for_status()
+                with open(part_path, "wb") as f:
+                    for chunk in r.iter_content(CHUNK_SIZE):
+                        if cancel_event and cancel_event.is_set():
+                            raise CancelledError("Download cancelled")
+                        f.write(chunk)
+                        with progress_lock:
+                            shared_progress[0] += len(chunk)
+                            done = shared_progress[0]
 
-                    elapsed = time.time() - start_time
-                    speed = (done / (1024 * 1024)) / elapsed if elapsed > 0 else 0
-                    done_mb = done / (1024 * 1024)
-                    if total_size > 0:
-                        total_mb = total_size / (1024 * 1024)
-                        pct = (done / total_size) * 100
-                        print(
-                            f"\r    Downloading: {done_mb:.2f} / {total_mb:.2f} MB"
-                            f"  ({pct:.0f}%)  {speed:.1f} MB/s  [part {part_index+1}/{PARALLEL_PARTS}]",
-                            end="", flush=True,
-                        )
-                    else:
-                        print(f"\r    Downloading: {done_mb:.2f} MB  {speed:.1f} MB/s", end="", flush=True)
+                        elapsed = time.time() - start_time
+                        speed = (done / (1024 * 1024)) / elapsed if elapsed > 0 else 0
+                        done_mb = done / (1024 * 1024)
+                        if total_size > 0:
+                            total_mb = total_size / (1024 * 1024)
+                            pct = (done / total_size) * 100
+                            print(
+                                f"\r    Downloading: {done_mb:.2f} / {total_mb:.2f} MB"
+                                f"  ({pct:.0f}%)  {speed:.1f} MB/s  [part {part_index+1}/{PARALLEL_PARTS}]",
+                                end="", flush=True,
+                            )
+                        else:
+                            print(f"\r    Downloading: {done_mb:.2f} MB  {speed:.1f} MB/s", end="", flush=True)
 
-                    if progress_callback:
-                        progress_callback(done, total_size)
-            return  # success
-        except CancelledError:
-            raise
-        except Exception as e:
-            if attempt == 3:
-                raise TeraBoxError(f"Part {part_index} failed after 4 attempts: {e}")
-            backoff = (2 ** attempt) + random.uniform(0.5, 2.0)
-            print(f"\n [Part {part_index} retry {attempt+1} – sleep {backoff:.1f}s]", end="", flush=True)
-            time.sleep(backoff)
+                        if progress_callback:
+                            progress_callback(done, total_size)
+                return  # success
+            except CancelledError:
+                raise
+            except Exception as e:
+                if attempt == 3:
+                    raise TeraBoxError(f"Part {part_index} failed after 4 attempts: {e}")
+                backoff = (2 ** attempt) + random.uniform(0.5, 2.0)
+                print(f"\n [Part {part_index} retry {attempt+1} – sleep {backoff:.1f}s]", end="", flush=True)
+                time.sleep(backoff)
+    finally:
+        session.close()
 
 
 def _download_video_multipart(
@@ -241,69 +244,71 @@ def _download_video(
     progress_callback=None,
 ) -> None:
     session = _build_session()
+    try:
+        # Set Referer to the download URL's origin (some CDNs check this)
+        parsed = urlparse(download_url)
+        session.headers["Referer"] = f"{parsed.scheme}://{parsed.netloc}/"
 
-    # Set Referer to the download URL's origin (some CDNs check this)
-    parsed = urlparse(download_url)
-    session.headers["Referer"] = f"{parsed.scheme}://{parsed.netloc}/"
+        # Check if the CDN supports byte-range requests
+        total_size = _check_range_support(session, download_url)
 
-    # Check if the CDN supports byte-range requests
-    total_size = _check_range_support(session, download_url)
+        if total_size > 0:
+            print(f"    [MultiPart] Server supports Range. Splitting into {PARALLEL_PARTS} parts ({total_size/(1024*1024):.1f} MB total).")
+            _download_video_multipart(session, download_url, download_path, total_size, cancel_event, progress_callback)
 
-    if total_size > 0:
-        print(f"    [MultiPart] Server supports Range. Splitting into {PARALLEL_PARTS} parts ({total_size/(1024*1024):.1f} MB total).")
-        _download_video_multipart(session, download_url, download_path, total_size, cancel_event, progress_callback)
-
-        actual = os.path.getsize(download_path)
-        if actual < total_size * 0.95:
-            raise TeraBoxError(
-                f"Incomplete download: got {actual} bytes, expected {total_size}"
-            )
-        return
-
-    # ---- Fallback: single-stream download (server doesn't support Range) ----
-    print("    [SingleStream] Server does not support Range requests. Falling back to single stream.")
-    for attempt in range(4):
-        if cancel_event and cancel_event.is_set():
-            raise CancelledError("Download cancelled")
-        try:
-            r = session.get(download_url, stream=True, timeout=120)
-            r.raise_for_status()
-
-            total_size = int(r.headers.get("content-length", 0))
-            done_size = 0
-            start_time = time.time()
-
-            with open(download_path, "wb") as f:
-                for chunk in r.iter_content(CHUNK_SIZE):
-                    if cancel_event and cancel_event.is_set():
-                        raise CancelledError("Download cancelled")
-                    f.write(chunk)
-                    done_size += len(chunk)
-
-                    # Progress display
-                    done_mb = done_size / (1024 * 1024)
-                    elapsed = time.time() - start_time
-                    speed = (done_size / (1024 * 1024)) / elapsed if elapsed > 0 else 0
-                    if total_size > 0:
-                        total_mb = total_size / (1024 * 1024)
-                        pct = (done_size / total_size) * 100
-                        print(f"\r    Downloading: {done_mb:.2f} / {total_mb:.2f} MB  ({pct:.0f}%)  {speed:.1f} MB/s", end="", flush=True)
-                    else:
-                        print(f"\r    Downloading: {done_mb:.2f} MB  {speed:.1f} MB/s", end="", flush=True)
-
-                    if progress_callback:
-                        progress_callback(done_size, total_size)
-            
             actual = os.path.getsize(download_path)
-            if actual < 512:
-                raise TeraBoxError("Segment too small (< 512 bytes)")
+            if actual < total_size * 0.95:
+                raise TeraBoxError(
+                    f"Incomplete download: got {actual} bytes, expected {total_size}"
+                )
             return
-        except CancelledError:
-            raise
-        except Exception as e:
-            if attempt == 3:
-                raise TeraBoxError(f"Chunk failed after 4 attempts: {e}")
 
-            backoff = (2 ** attempt) + random.uniform(1.0, 3.0)
-            print(f"\n [Retry {attempt + 1} - sleep {backoff:.1f}s]", end="", flush=True)
-            time.sleep(backoff)
+        # ---- Fallback: single-stream download (server doesn't support Range) ----
+        print("    [SingleStream] Server does not support Range requests. Falling back to single stream.")
+        for attempt in range(4):
+            if cancel_event and cancel_event.is_set():
+                raise CancelledError("Download cancelled")
+            try:
+                r = session.get(download_url, stream=True, timeout=120)
+                r.raise_for_status()
+
+                total_size = int(r.headers.get("content-length", 0))
+                done_size = 0
+                start_time = time.time()
+
+                with open(download_path, "wb") as f:
+                    for chunk in r.iter_content(CHUNK_SIZE):
+                        if cancel_event and cancel_event.is_set():
+                            raise CancelledError("Download cancelled")
+                        f.write(chunk)
+                        done_size += len(chunk)
+
+                        # Progress display
+                        done_mb = done_size / (1024 * 1024)
+                        elapsed = time.time() - start_time
+                        speed = (done_size / (1024 * 1024)) / elapsed if elapsed > 0 else 0
+                        if total_size > 0:
+                            total_mb = total_size / (1024 * 1024)
+                            pct = (done_size / total_size) * 100
+                            print(f"\r    Downloading: {done_mb:.2f} / {total_mb:.2f} MB  ({pct:.0f}%)  {speed:.1f} MB/s", end="", flush=True)
+                        else:
+                            print(f"\r    Downloading: {done_mb:.2f} MB  {speed:.1f} MB/s", end="", flush=True)
+
+                        if progress_callback:
+                            progress_callback(done_size, total_size)
+
+                actual = os.path.getsize(download_path)
+                if actual < 512:
+                    raise TeraBoxError("Segment too small (< 512 bytes)")
+                return
+            except CancelledError:
+                raise
+            except Exception as e:
+                if attempt == 3:
+                    raise TeraBoxError(f"Chunk failed after 4 attempts: {e}")
+
+                backoff = (2 ** attempt) + random.uniform(1.0, 3.0)
+                print(f"\n [Retry {attempt + 1} - sleep {backoff:.1f}s]", end="", flush=True)
+                time.sleep(backoff)
+    finally:
+        session.close()

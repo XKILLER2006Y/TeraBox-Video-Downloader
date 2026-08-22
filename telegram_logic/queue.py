@@ -48,6 +48,7 @@ class MessageQueue:
     async def _queue_worker(self) -> None:
         """Background task: drains the flood queue after cooldown expires."""
         log.info("[Queue] Flood-wait queue worker started.")
+        retry_counts: dict[tuple, int] = {}
         while True:
             process_callable, event, url, args = await self._queue.get()
             try:
@@ -69,11 +70,24 @@ class MessageQueue:
 
             except FloodWaitError as e:
                 self.update_flood_until(e.seconds)
-                log.warning(
-                    f"[Queue worker] Hit FloodWait again ({e.seconds}s), "
-                    f"re-queuing url={url}"
-                )
-                await self._queue.put((process_callable, event, url, args))
+                key = (id(event), url)
+                tries = retry_counts.get(key, 0) + 1
+                if tries >= 3:
+                    retry_counts.pop(key, None)
+                    log.error(f"[Queue worker] url={url} hit FloodWait 3x — dropping")
+                    try:
+                        await event.respond(
+                            f"❌ Failed to process `{url}`: repeated Telegram flood limits. Try again later."
+                        )
+                    except Exception:
+                        pass
+                else:
+                    retry_counts[key] = tries
+                    log.warning(
+                        f"[Queue worker] Hit FloodWait ({e.seconds}s), "
+                        f"re-queuing url={url} (attempt {tries}/3)"
+                    )
+                    await self._queue.put((process_callable, event, url, args))
             except Exception as ex:
                 log.error(f"[Queue worker] Error for url={url}: {ex}")
                 try:
