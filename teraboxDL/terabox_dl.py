@@ -301,8 +301,22 @@ def _get_video_metadata(terabox_url: str) -> dict:
     sign = info["sign"]
     timestamp = info["timestamp"]
     fs_id = files[0]["fs_id"]
+    filename = files[0].get("server_filename", "unknown")
 
-    log.info(f"Share: {files[0].get('server_filename', 'unknown')} ({len(files)} file(s))")
+    log.info(f"Share: {filename} ({len(files)} file(s))")
+
+    # Check if file is a video before attempting HLS chunk discovery
+    VIDEO_EXTS = (
+        ".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm",
+        ".m4v", ".ts", ".mpg", ".mpeg", ".3gp", ".vob", ".ogv",
+    )
+    ext = os.path.splitext(filename)[1].lower()
+    if ext and ext not in VIDEO_EXTS:
+        raise TeraBoxDirectError(
+            f"This file is not a video ({filename}). "
+            f"Only video files (mp4, mkv, etc.) can be downloaded. "
+            f"Non-video files like PDFs, documents, and archives are not supported."
+        )
 
     # Step 3: Build streaming URL and discover all HLS chunks
     m3u8_path = _discover_all_hls_chunks(session, shareid, uk, sign, timestamp, fs_id, surl)
@@ -366,8 +380,12 @@ def get_video_info(terabox_url: str, is_hd: bool) -> dict:
         download_url = file_info.get("stream_url", "")
         # If stream_url is a local M3U8 file path, get its size; otherwise HEAD request
         if download_url and not download_url.startswith("http"):
-            # Local M3U8 playlist — estimate size from metadata
+            # Local M3U8 playlist — estimate size from metadata; clean up temp file after use
             file_size = int(file_info.get("size", 0))
+            try:
+                os.remove(download_url)
+            except OSError:
+                pass
         elif download_url:
             file_size = _get_file_size_bytes(download_url)
         else:

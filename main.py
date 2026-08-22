@@ -22,10 +22,14 @@ from firebase_db.users import track_user, get_user_mode
 async def global_tracker(event):
     username = None
 
-    if getattr(event.sender, 'username', None):
-        username = event.sender.username
-    elif getattr(event.chat, 'username', None):
-        username = event.chat.username
+    try:
+        sender = await event.get_sender()
+        if sender and getattr(sender, 'username', None):
+            username = sender.username
+        elif getattr(event.chat, 'username', None):
+            username = event.chat.username
+    except Exception:
+        pass
 
     try:
         track_user(event.chat_id, username)
@@ -89,7 +93,7 @@ async def handle_message(event):
         except Exception as e:
             log.error(f"Unhandled error in handle_message: {e}")
 
-    if mode == 'exp':
+    elif mode == 'exp':
         terabox_url_list = extract_all_terabox_url_exp(text)
         if not terabox_url_list:
             if extract_all_diskwala_urls(text):
@@ -101,7 +105,7 @@ async def handle_message(event):
         except Exception as e:
             log.error(f"Unhandled error in handle_message: {e}")
 
-    if mode == 'exphd':
+    elif mode == 'exphd':
         terabox_url_list = extract_all_terabox_url_exp(text)
         if not terabox_url_list:
             if extract_all_diskwala_urls(text):
@@ -113,7 +117,7 @@ async def handle_message(event):
         except Exception as e:
             log.error(f"Unhandled error in handle_message: {e}")
 
-    if mode == 'dw':
+    elif mode == 'dw':
         diskwala_url_list = extract_all_diskwala_urls(text)
         if not diskwala_url_list:
             if extract_all_terabox_url_exp(text):

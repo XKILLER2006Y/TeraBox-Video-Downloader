@@ -21,6 +21,7 @@ import json
 import time
 import logging
 import asyncio
+import hashlib
 from urllib.parse import urlparse, unquote
 
 import requests
@@ -38,8 +39,11 @@ DISKWALA_BOT_USERNAME = os.getenv("DISKWALA_BOT_USERNAME", "sky577bot")
 DISKWALA_APP_SHORT_NAME = os.getenv("DISKWALA_APP_SHORT_NAME", "open")
 
 DISKWALA_API_BASE = "https://api2.diskwala.net/api/diskwala"
-DISKWALA_DOWNLOAD_API = f"{DISKWALA_API_BASE}/download"
+DISKWALA_DOWNLOAD_API = f"{DISKWALA_API_BASE}/download/d"
 DISKWALA_STATUS_API = f"{DISKWALA_API_BASE}/status?link="
+
+# AES-GCM key for decrypting _x responses (extracted from Mini App JS bundle)
+_DISKWALA_AES_KEY_HEX = "e7109544dab612bd5b80b8a427ac474ba5541b9efff7a4ca1c8ef85df2489c23"
 
 # Regex for Diskwala share URLs
 DISKWALA_URL_RE = re.compile(
@@ -53,6 +57,35 @@ _LINK_ID_RE = re.compile(r"[a-fA-F0-9]{24}")
 class DiskwalaDirectError(Exception):
     """Raised when direct Diskwala resolution fails."""
     pass
+
+
+# ── AES-GCM decryption ──────────────────────────────────────────────────────
+
+def _decrypt_diskwala_response(encrypted_obj: dict) -> dict:
+    """
+    Decrypt an _x=1 response from the Diskwala API.
+
+    The Mini App returns { _x: true, s: <iv_hex>, h: <tag_hex>, p: <ct_hex> }.
+    This function decrypts using AES-256-GCM with the hardcoded key from the
+    Mini App JS bundle, returning the plaintext JSON as a dict.
+    """
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.backends import default_backend
+
+    if not encrypted_obj.get("_x"):
+        return encrypted_obj
+
+    key = bytes.fromhex(_DISKWALA_AES_KEY_HEX)
+    iv = bytes.fromhex(encrypted_obj["s"])
+    tag = bytes.fromhex(encrypted_obj["h"])
+    ct = bytes.fromhex(encrypted_obj["p"])
+
+    # AES-GCM: ciphertext + appended auth tag
+    aesgcm = AESGCM(key)
+    plaintext = aesgcm.decrypt(iv, ct + tag, None)
+
+    return json.loads(plaintext.decode("utf-8"))
 
 
 # ── URL helpers ──────────────────────────────────────────────────────────────
@@ -129,21 +162,20 @@ async def _get_auth_token() -> str:
         theme_params=DataJSON("{}"),
     ))
 
-    # Extract the auth token from the URL fragment
+    # The Mini App sends the raw initData string as Bearer token.
+    # The URL fragment contains: tgWebAppData=<URL-encoded initData>&tgWebAppVersion=...
+    # We need to extract and decode just the initData portion.
     url = result.url
     fragment = urlparse(url).fragment
     tg_web_app_data = unquote(
         fragment.split("tgWebAppData=", 1)[1].split("&tgWebAppVersion=", 1)[0]
     )
 
-    # The token is inside the JSON data
-    data = json.loads(tg_web_app_data)
-    auth_token = data.get("auth", {}).get("auth_token")
-    if not auth_token:
-        raise DiskwalaDirectError(f"No auth_token in Mini App response: {tg_web_app_data[:200]}")
+    if not tg_web_app_data:
+        raise DiskwalaDirectError("Empty initData in Mini App response")
 
     log.info("Got Diskwala auth token via Mini App")
-    return auth_token
+    return tg_web_app_data
 
 
 # ── API calls ────────────────────────────────────────────────────────────────
@@ -169,6 +201,9 @@ def _start_download(diskwala_url: str, headers: dict) -> dict:
         timeout=60,
     )
     data = resp.json()
+    # Decrypt _x responses
+    if isinstance(data, dict) and data.get("_x"):
+        data = _decrypt_diskwala_response(data)
     if not data.get("ok"):
         raise DiskwalaDirectError(
             data.get("error", "Download API returned ok=false")
@@ -235,16 +270,21 @@ def get_diskwala_info_direct(diskwala_url: str) -> dict:
 
     # Get auth token (sync wrapper around async Telethon)
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # We're inside an async context — use ensure_future
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
+            # Inside an async context — run in a thread to avoid deadlocking the loop
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor() as pool:
                 auth_token = pool.submit(
                     asyncio.run, _get_auth_token()
                 ).result(timeout=30)
         else:
-            auth_token = loop.run_until_complete(_get_auth_token())
+            # Sync context — just run it
+            auth_token = asyncio.run(_get_auth_token())
     except DiskwalaDirectError:
         raise
     except Exception as e:
@@ -269,6 +309,10 @@ def get_diskwala_info_direct(diskwala_url: str) -> dict:
     file_obj = result.get("file")
     if not file_obj:
         raise DiskwalaDirectError(f"No file in Diskwala response: {result}")
+
+    # Decrypt _x encrypted file data
+    if isinstance(file_obj, dict) and file_obj.get("_x"):
+        file_obj = _decrypt_diskwala_response(file_obj)
 
     filename = _pick_file_field(file_obj, "name", "fileName", "filename", "title")
     size = _pick_file_field(file_obj, "size", "fileSize", "length", required=False, default=0)

@@ -22,8 +22,13 @@ import shutil
 import threading
 import time
 from urllib.parse import urlparse, urljoin
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+from terabox.internal_helpers import CancelledError
 
 log = logging.getLogger(__name__)
 
@@ -45,6 +50,21 @@ _PLAIN_HEADERS = {
 }
 
 CHUNK_SIZE = 1 * 1024 * 1024  # 1 MB
+HLS_PARALLEL_SEGMENTS = 4  # parallel segment download workers
+
+
+def _build_session() -> requests.Session:
+    """Create a requests session with connection pooling and browser headers."""
+    session = requests.Session()
+    session.headers.update(_BROWSER_HEADERS)
+    adapter = HTTPAdapter(
+        pool_connections=HLS_PARALLEL_SEGMENTS,
+        pool_maxsize=HLS_PARALLEL_SEGMENTS,
+        max_retries=Retry(total=0),
+    )
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
 
 
 def is_streaming_manifest(url: str) -> bool:
@@ -110,7 +130,8 @@ def _download_direct_file(
     """Download a direct video file with streaming + progress reporting."""
     log.info(f"Downloading direct file from: {url}")
 
-    with requests.get(url, headers=_BROWSER_HEADERS, stream=True, timeout=120) as r:
+    session = _build_session()
+    with session.get(url, stream=True, timeout=120) as r:
         r.raise_for_status()
         total = int(r.headers.get("content-length", 0))
         downloaded = 0
@@ -118,7 +139,7 @@ def _download_direct_file(
         with open(output_file, "wb") as f:
             for chunk in r.iter_content(chunk_size=CHUNK_SIZE):
                 if cancel_event and cancel_event.is_set():
-                    raise Exception("Download cancelled")
+                    raise CancelledError("Download cancelled")
                 if not chunk:
                     continue
                 f.write(chunk)
@@ -147,7 +168,8 @@ def _download_hls_segments(
 ) -> None:
     """Fetch a remote m3u8 manifest and download all segments."""
     log.info(f"Fetching m3u8 manifest from: {manifest_url}")
-    r = requests.get(manifest_url, headers=_PLAIN_HEADERS, timeout=30)
+    session = _build_session()
+    r = session.get(manifest_url, timeout=30)
     r.raise_for_status()
     manifest_text = r.text
     log.info(f"Manifest content ({len(manifest_text)} bytes):\n{manifest_text[:200]}...")
@@ -187,61 +209,82 @@ def _download_hls_from_manifest(
     segment_urls = _parse_m3u8_segments(manifest_text, base_url)
     if not segment_urls:
         raise Exception("No segments found in m3u8 manifest")
-    log.info(f"Found {len(segment_urls)} segments in manifest")
 
+    num_segments = len(segment_urls)
+    log.info(f"Found {num_segments} segments in manifest")
     ts_output = output_file + ".ts"
-    total_downloaded = 0
+    part_dir = output_file + ".parts"
+    os.makedirs(part_dir, exist_ok=True)
+    part_paths = [os.path.join(part_dir, f"seg_{i}.ts") for i in range(num_segments)]
+
+    progress_lock = threading.Lock()
+    shared_progress = [0]
     start_time = time.time()
 
-    try:
-        with open(ts_output, "wb") as out_f:
-            for i, seg_url in enumerate(segment_urls):
-                if cancel_event and cancel_event.is_set():
-                    raise Exception("Download cancelled")
+    def _download_segment(seg_url: str, seg_index: int) -> int:
+        """Download a single segment to its temp file. Returns bytes downloaded."""
+        session = _build_session()
+        parsed = urlparse(seg_url)
+        session.headers["Referer"] = f"{parsed.scheme}://{parsed.netloc}/"
 
-                log.info(f"Downloading segment {i + 1}/{len(segment_urls)}")
+        for attempt in range(3):
+            if cancel_event and cancel_event.is_set():
+                raise CancelledError("Download cancelled")
+            try:
+                seg_r = session.get(seg_url, stream=True, timeout=60)
+                seg_r.raise_for_status()
+                seg_bytes = 0
+                with open(part_paths[seg_index], "wb") as f:
+                    for chunk in seg_r.iter_content(chunk_size=CHUNK_SIZE):
+                        if cancel_event and cancel_event.is_set():
+                            raise CancelledError("Download cancelled")
+                        if not chunk:
+                            continue
+                        f.write(chunk)
+                        seg_bytes += len(chunk)
 
-                for attempt in range(3):
-                    try:
-                        seg_r = requests.get(
-                            seg_url,
-                            headers=_PLAIN_HEADERS,
-                            stream=True,
-                            timeout=60,
+                        with progress_lock:
+                            shared_progress[0] += len(chunk)
+                            done = shared_progress[0]
+
+                        elapsed = time.time() - start_time
+                        speed = (done / (1024 * 1024)) / elapsed if elapsed > 0 else 0
+                        print(
+                            f"\r    Downloading: {done / (1024 * 1024):.2f} MB  "
+                            f"{speed:.1f} MB/s  "
+                            f"[{seg_index + 1}/{num_segments} segments]",
+                            end="", flush=True,
                         )
-                        seg_r.raise_for_status()
+                        if progress_callback:
+                            progress_callback(done, 0)
+                return seg_bytes
+            except CancelledError:
+                raise
+            except Exception as e:
+                if attempt == 2:
+                    raise Exception(
+                        f"Segment {seg_index + 1} failed after 3 attempts: {e}"
+                    )
+                log.warning(f"Segment {seg_index + 1} attempt {attempt + 1} failed: {e}, retrying...")
+                time.sleep(1 + attempt)
+        return 0
 
-                        for chunk in seg_r.iter_content(chunk_size=CHUNK_SIZE):
-                            if cancel_event and cancel_event.is_set():
-                                raise Exception("Download cancelled")
-                            if not chunk:
-                                continue
-                            out_f.write(chunk)
-                            total_downloaded += len(chunk)
+    try:
+        with ThreadPoolExecutor(max_workers=HLS_PARALLEL_SEGMENTS) as executor:
+            futures = {
+                executor.submit(_download_segment, url, i): i
+                for i, url in enumerate(segment_urls)
+            }
+            for future in as_completed(futures):
+                future.result()  # re-raise any exception
 
-                            elapsed = time.time() - start_time
-                            speed = (total_downloaded / (1024 * 1024)) / elapsed if elapsed > 0 else 0
-                            print(
-                                f"\r    Downloading: {total_downloaded / (1024 * 1024):.2f} MB  "
-                                f"{speed:.1f} MB/s  "
-                                f"[segment {i + 1}/{len(segment_urls)}]",
-                                end="", flush=True,
-                            )
+        # Concatenate segments in order
+        with open(ts_output, "wb") as out:
+            for part_path in part_paths:
+                with open(part_path, "rb") as p:
+                    shutil.copyfileobj(p, out)
 
-                            if progress_callback:
-                                progress_callback(total_downloaded, 0)
-
-                        break
-                    except Exception as e:
-                        if "cancelled" in str(e).lower():
-                            raise
-                        if attempt == 2:
-                            raise Exception(
-                                f"Segment {i + 1} failed after 3 attempts: {e}"
-                            )
-                        log.warning(f"Segment {i + 1} attempt {attempt + 1} failed: {e}, retrying...")
-                        time.sleep(1 + attempt)
-
+        total_downloaded = os.path.getsize(ts_output)
         print()
         log.info(f"All segments downloaded: {ts_output} ({total_downloaded / 1e6:.2f} MB)")
 
@@ -275,6 +318,19 @@ def _download_hls_from_manifest(
             except Exception:
                 pass
         raise
+    finally:
+        # Clean up temp segment files
+        for pp in part_paths:
+            if os.path.exists(pp):
+                try:
+                    os.remove(pp)
+                except Exception:
+                    pass
+        if os.path.exists(part_dir):
+            try:
+                os.rmdir(part_dir)
+            except Exception:
+                pass
 
 
 def download_from_stream_url(

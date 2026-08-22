@@ -16,7 +16,7 @@ def make_download_progress_cb(status_msg, filename, size_str, loop, cancel_btn=N
 
     def callback(current, total):
         now = time.time()
-        # Update every 3 seconds, or when the transfer is complete (current == total)
+        # Update every 5 seconds, or when the transfer is complete (current == total)
         if (now - last_update[0] < 5) and (current < total):
             return
         last_update[0] = now
@@ -45,7 +45,7 @@ def make_upload_progress_cb(status_msg, filename, size_str, loop, cancel_btn=Non
 
     def callback(current, total):
         now = time.time()
-        # Update every 3 seconds, or when the transfer is complete (current == total)
+        # Update every 5 seconds, or when the transfer is complete (current == total)
         if (now - last_update[0] < 5) and (current < total):
             return
         last_update[0] = now
