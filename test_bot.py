@@ -6,9 +6,14 @@ import requests
 import time
 import json
 import sys
+import os
+from dotenv import load_dotenv
 
-BOT_TOKEN = "ROTATED-USE-ENV-VAR"
-CHAT_ID = "8514944632"  # Your Telegram user ID
+load_dotenv()
+BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+CHAT_ID = os.getenv("ADMIN_ID") or os.getenv("TEST_CHAT_ID", "")
+if not BOT_TOKEN or not CHAT_ID:
+    sys.exit("Set BOT_TOKEN and ADMIN_ID (or TEST_CHAT_ID) in .env first.")
 BASE = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 def send_command(text):
