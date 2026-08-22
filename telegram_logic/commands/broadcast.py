@@ -67,7 +67,7 @@ async def cmd_broadcast(event):
         )
         return
 
-    users = get_all_users()
+    users = await asyncio.to_thread(get_all_users)
     if not users:
         await event.respond("No users found to broadcast.")
         return

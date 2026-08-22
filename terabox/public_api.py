@@ -1,5 +1,6 @@
 import threading
 import os
+import hashlib
 import requests
 import shutil
 from .internal_helpers import _safe_filename, BYTES_PER_MB, _headers
@@ -23,13 +24,16 @@ def prepare_terabox_link(surl: str) -> dict:
     Raises TeraBoxError on any failure.
     """
     temp_session = requests.Session()
-    
-    print("[1] Extracting jsToken...")
-    js_token = get_js_token(temp_session, surl)
-    print(f"    jsToken: {js_token[:30]}...")
 
-    print("[2] Fetching share info...")
-    info = get_share_info(temp_session, js_token, surl)
+    print("[1] Extracting jsToken...")
+    try:
+        js_token = get_js_token(temp_session, surl)
+        print(f"    jsToken: {js_token[:30]}...")
+
+        print("[2] Fetching share info...")
+        info = get_share_info(temp_session, js_token, surl)
+    finally:
+        temp_session.close()
     files = info.get("list", [])
     if not files:
         print("    No files in share.")
@@ -66,8 +70,12 @@ def download_terabox_file(
     session = prepared["session"]
     filename = prepared["filename"]
     size = prepared["size"]
-    
+
     safe = _safe_filename(filename)
+    # Hash-prefix prevents same-named files from different shares colliding
+    # on disk when processed concurrently.
+    url_hash = hashlib.sha256(surl.encode()).hexdigest()[:8]
+    safe = f"{url_hash}_{safe}"
     os.makedirs(STORAGE_DIR, exist_ok=True)
     mp4_path = os.path.join(STORAGE_DIR, safe if safe.lower().endswith(".mp4") else safe + ".mp4")
     tmp_dir = os.path.join(STORAGE_DIR, safe.rsplit(".", 1)[0] + "_segments")

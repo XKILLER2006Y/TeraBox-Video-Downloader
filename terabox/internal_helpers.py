@@ -24,15 +24,12 @@ BYTES_PER_MB = 1048576
 CookiesList = []
 
 def load_cookies_from_env():
+    """Load COOKIES1..COOKIES20 from the environment (order preserved)."""
     CookiesList.clear()
-    # assume upto 10 cookies are in env
-    for idx in range(1, 10):
-        try:
-            cookie = os.getenv(f"COOKIES{idx}")
-            if cookie:
-                CookiesList.append(cookie)
-        except Exception as e:
-            break
+    for idx in range(1, 21):
+        cookie = os.getenv(f"COOKIES{idx}")
+        if cookie:
+            CookiesList.append(cookie)
 
 load_cookies_from_env()  
 

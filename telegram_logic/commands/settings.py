@@ -1,4 +1,5 @@
 from telethon import events, Button
+import asyncio
 import logging
 from ..bot import bot
 from firebase_db.users import set_user_mode, get_user_mode
@@ -33,7 +34,7 @@ async def cmd_settings(event):
         )
 
     try:
-        current_mode = get_user_mode(chat_id)
+        current_mode = await asyncio.to_thread(get_user_mode, chat_id)
     except Exception as e:
         log.error(f"[/settings] DB error fetching mode for chat {chat_id}: {e}")
         await event.respond(
@@ -62,11 +63,16 @@ async def cmd_settings(event):
 async def cb_set_mode(event):
     mode = event.pattern_match.group(1).decode("utf-8")
     chat_id = event.chat_id
-    
+
+    # Never trust callback data — only accept known modes
+    if mode not in AVAILABLE_MODES:
+        await event.answer("⚠️ Unknown mode.")
+        return
+
     log.info(f"Mode Switch to {mode}, for user {chat_id}")
 
     try:
-        success = set_user_mode(chat_id, mode)
+        success = await asyncio.to_thread(set_user_mode, chat_id, mode)
     except Exception as e:
         log.error(f"[cb_set_mode] Unexpected DB error for chat {chat_id}: {e}")
         success = False

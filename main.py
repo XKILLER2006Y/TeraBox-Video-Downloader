@@ -32,7 +32,7 @@ async def global_tracker(event):
         pass
 
     try:
-        track_user(event.chat_id, username)
+        await asyncio.to_thread(track_user, event.chat_id, username)
     except Exception as e:
         log.error(f"[global_tracker] Unexpected error in track_user: {e}")
     # Does not raise StopPropagation, allowing other handlers to execute
@@ -75,7 +75,7 @@ async def handle_message(event):
     
     # Get mode based on user-id..
     try:
-        mode = get_user_mode(event.chat_id)
+        mode = await asyncio.to_thread(get_user_mode, event.chat_id)
     except Exception as e:
         log.error(f"[handle_message] DB error fetching user mode: {e}")
         await event.respond("⚠️ Database error. Please try again later.")

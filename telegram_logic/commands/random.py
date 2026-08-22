@@ -8,7 +8,8 @@ from firebase_db.cache import get_cache_for_random
 
 from dotenv import load_dotenv
 load_dotenv()
-STORAGE_GROUP_ID = int(os.getenv("STORAGE_GROUP_ID", "0"))
+from ..helpers import env_int
+STORAGE_GROUP_ID = env_int("STORAGE_GROUP_ID")
 
 log = logging.getLogger(__name__)
 

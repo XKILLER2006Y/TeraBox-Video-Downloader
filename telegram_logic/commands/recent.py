@@ -1,4 +1,5 @@
 import os
+import asyncio
 import logging
 import time
 from datetime import datetime, timezone, timedelta
@@ -20,7 +21,7 @@ async def cmd_recent(event):
 
     status = await event.respond("📊 Fetching recent users...")
     
-    users_data = get_all_users()
+    users_data = await asyncio.to_thread(get_all_users)
     
     if not users_data:
         await status.edit("No user data found.")

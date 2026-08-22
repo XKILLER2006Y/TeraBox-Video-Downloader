@@ -1,5 +1,6 @@
 import threading
 import os
+import hashlib
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -61,8 +62,13 @@ def download_terabox_file_experimental(
     Returns the absolute path to a local MP4 file.
     Raises TeraBoxError or CancelledError.
     """
-    
+
     safe = _safe_filename(filename)
+    # Prefix with a short hash of the source URL so that two different
+    # shares with identical filenames never collide on disk when processed
+    # concurrently (interleaved writes + wrong-file cleanup).
+    url_hash = hashlib.sha256(download_url.encode()).hexdigest()[:8]
+    safe = f"{url_hash}_{safe}"
     os.makedirs(STORAGE_DIR, exist_ok=True)
     mp4_path = os.path.join(STORAGE_DIR, safe if safe.lower().endswith(".mp4") else safe + ".mp4")
    
