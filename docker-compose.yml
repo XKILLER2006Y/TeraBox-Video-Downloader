@@ -13,11 +13,11 @@ services:
       - storage_data:/app/storage
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:${PORT:-3000}/ping"]
+      test: ["CMD", "python", "-c", "import urllib.request,os;urllib.request.urlopen(f'http://localhost:{os.environ.get(\"PORT\",\"3000\")}/ping')"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 10s
+      start_period: 15s
 
 volumes:
   storage_data:
