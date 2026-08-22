@@ -20,6 +20,11 @@ from firebase_db.users import track_user, get_user_mode
 
 @bot.on(events.NewMessage)
 async def global_tracker(event):
+    # Ignore the storage group — its own posts are not user activity,
+    # and tracking it would pollute /recent and /broadcast targets.
+    if STORAGE_GROUP_ID and event.chat_id == STORAGE_GROUP_ID:
+        return
+
     username = None
 
     try:
@@ -69,6 +74,10 @@ TERABOX_IN_DISKWALA_MODE = (
 
 @bot.on(events.NewMessage)
 async def handle_message(event):
+    # Storage group posts are never download requests
+    if STORAGE_GROUP_ID and event.chat_id == STORAGE_GROUP_ID:
+        return
+
     text = event.raw_text or ""
     if text.startswith("/"):
         return  # Let command handlers deal with commands

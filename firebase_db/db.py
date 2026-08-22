@@ -191,7 +191,7 @@ def _fix_private_key(creds: dict) -> None:
 def _init_firebase() -> firestore.Client:
     if firebase_admin._apps:
         # Already initialized (e.g. during hot-reload / testing)
-        return firestore.client()
+        return firestore.client(database_id=os.getenv("FIRESTORE_DB_ID", "(default)"))
 
     module_dir = os.path.dirname(__file__)
     generated_path = os.path.join(module_dir, "fb_secrets.json")
@@ -225,7 +225,7 @@ def _init_firebase() -> firestore.Client:
             "Set FIREBASE_SECRETS env-var in .env."
         )
 
-    return firestore.client()
+    return firestore.client(database_id=os.getenv("FIRESTORE_DB_ID", "(default)"))
 
 
 db: firestore.Client = _init_firebase()
