@@ -13,7 +13,7 @@ from .progress_callbacks import make_download_progress_cb, make_upload_progress_
 
 from terabox.public_api import TeraBoxError, CancelledError
 from teraboxDL.public_api import download_terabox_file_experimental
-from teraboxDL.terabox_dl import get_video_info
+from teraboxDL.terabox_dl import get_video_info, TeraBoxDirectError
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -106,6 +106,11 @@ async def helper(event, terabox_url: str, is_hd: bool) -> None:
     #! GET FILE INFO
     try:
         info = await asyncio.to_thread(get_video_info, terabox_url, is_hd)
+    except TeraBoxDirectError as e:
+        log.error(f"Metadata fetch failed for surl={surl}: {e}")
+        await _safe_send(status.edit, f"❌ {e}\n\nYou can try different *mode* to download.\nSwitch *mode* from /settings")
+        active_tasks.pop(task_key, None)
+        return
     except Exception as e:
         log.error(f"Metadata fetch failed for surl={surl}: {e}")
         await _safe_send(status.edit, f"❌ Failed to get video info: {e}\n\nYou can try different *mode* to download.\nSwitch *mode* from /settings")

@@ -81,11 +81,31 @@ def get_diskwala_info(diskwala_url: str) -> dict:
     """
     Resolve a Diskwala share URL to downloadable video info.
 
+    Strategy: try direct resolution (Telethon Mini App) first,
+    fall back to proxy if SESSION is not configured.
+
     Returns {"filename": str, "size": int, "download_url": str}.
     Raises DiskwalaError on any failure.
     """
+    # --- Strategy 1: Direct resolution via Telethon ---
+    try:
+        from .diskwala_dl import get_diskwala_info_direct, DiskwalaDirectError
+        log.info("Trying direct Diskwala resolution…")
+        result = get_diskwala_info_direct(diskwala_url)
+        return result
+    except DiskwalaDirectError as e:
+        log.info(f"Direct resolution unavailable: {e} — falling back to proxy")
+    except ImportError:
+        log.info("diskwala_dl not available — falling back to proxy")
+    except Exception as e:
+        log.warning(f"Direct resolution failed unexpectedly: {e} — falling back to proxy")
+
+    # --- Strategy 2: Proxy ---
     if not DISKWALA_PROXY_URL:
-        raise DiskwalaError("DISKWALA_PROXY_URL not set in environment")
+        raise DiskwalaError(
+            "Neither SESSION (direct) nor DISKWALA_PROXY_URL (proxy) is configured. "
+            "Set SESSION in .env for direct resolution, or configure the proxy."
+        )
     if not DISKWALA_API_KEY:
         raise DiskwalaError("DISKWALA_API_KEY not set in environment")
 

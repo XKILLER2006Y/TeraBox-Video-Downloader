@@ -145,25 +145,50 @@ def _download_hls_segments(
     cancel_event: threading.Event | None = None,
     progress_callback=None,
 ) -> None:
-    """
-    Download an HLS stream by fetching the m3u8 manifest, downloading each
-    TS segment individually via requests, concatenating them, and optionally
-    remuxing to MP4 with ffmpeg.
-    """
-    # Step 1: Fetch the m3u8 manifest
+    """Fetch a remote m3u8 manifest and download all segments."""
     log.info(f"Fetching m3u8 manifest from: {manifest_url}")
     r = requests.get(manifest_url, headers=_PLAIN_HEADERS, timeout=30)
     r.raise_for_status()
     manifest_text = r.text
     log.info(f"Manifest content ({len(manifest_text)} bytes):\n{manifest_text[:200]}...")
 
-    # Step 2: Parse segment URLs from the manifest
-    segment_urls = _parse_m3u8_segments(manifest_text, manifest_url)
+    _download_hls_from_manifest(manifest_text, manifest_url, output_file, cancel_event, progress_callback)
+
+
+def _download_hls_segments_local(
+    m3u8_path: str,
+    output_file: str,
+    cancel_event: threading.Event | None = None,
+    progress_callback=None,
+) -> None:
+    """Read a LOCAL m3u8 playlist file and download all segments listed in it."""
+    log.info(f"Reading local m3u8 playlist: {m3u8_path}")
+    with open(m3u8_path, "r") as f:
+        manifest_text = f.read()
+
+    first_seg = ""
+    for line in manifest_text.strip().splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            first_seg = line
+            break
+
+    _download_hls_from_manifest(manifest_text, first_seg, output_file, cancel_event, progress_callback)
+
+
+def _download_hls_from_manifest(
+    manifest_text: str,
+    base_url: str,
+    output_file: str,
+    cancel_event: threading.Event | None = None,
+    progress_callback=None,
+) -> None:
+    """Core HLS download logic - shared by remote and local manifest paths."""
+    segment_urls = _parse_m3u8_segments(manifest_text, base_url)
     if not segment_urls:
         raise Exception("No segments found in m3u8 manifest")
     log.info(f"Found {len(segment_urls)} segments in manifest")
 
-    # Step 3: Download each segment and concatenate into a single .ts file
     ts_output = output_file + ".ts"
     total_downloaded = 0
     start_time = time.time()
@@ -176,7 +201,6 @@ def _download_hls_segments(
 
                 log.info(f"Downloading segment {i + 1}/{len(segment_urls)}")
 
-                # Retry logic for each segment
                 for attempt in range(3):
                     try:
                         seg_r = requests.get(
@@ -207,7 +231,7 @@ def _download_hls_segments(
                             if progress_callback:
                                 progress_callback(total_downloaded, 0)
 
-                        break  # segment succeeded
+                        break
                     except Exception as e:
                         if "cancelled" in str(e).lower():
                             raise
@@ -218,21 +242,16 @@ def _download_hls_segments(
                         log.warning(f"Segment {i + 1} attempt {attempt + 1} failed: {e}, retrying...")
                         time.sleep(1 + attempt)
 
-        print()  # newline after progress
+        print()
         log.info(f"All segments downloaded: {ts_output} ({total_downloaded / 1e6:.2f} MB)")
 
-        # Step 4: Remux .ts -> .mp4 with ffmpeg (if available)
         ffmpeg_path = shutil.which("ffmpeg")
         if ffmpeg_path and output_file.lower().endswith(".mp4"):
             log.info("Remuxing TS -> MP4 with ffmpeg...")
             cmd = [
-                ffmpeg_path,
-                "-y",
-                "-i", ts_output,
-                "-c", "copy",
-                "-bsf:a", "aac_adtstoasc",
-                "-movflags", "+faststart",
-                output_file,
+                ffmpeg_path, "-y", "-i", ts_output,
+                "-c", "copy", "-bsf:a", "aac_adtstoasc",
+                "-movflags", "+faststart", output_file,
             ]
             result = subprocess.run(cmd, capture_output=True)
             if result.returncode == 0:
@@ -242,9 +261,7 @@ def _download_hls_segments(
             else:
                 stderr = result.stderr.decode("utf-8", errors="replace")
                 log.warning(f"ffmpeg remux failed: {stderr[-300:]}")
-                # Fall through to rename approach
 
-        # Fallback: if ffmpeg not available or remux failed, just rename .ts
         if os.path.exists(ts_output):
             if os.path.exists(output_file):
                 os.remove(output_file)
@@ -252,7 +269,6 @@ def _download_hls_segments(
             log.info(f"Saved as {output_file} (TS container, no remux)")
 
     except Exception:
-        # Clean up on failure
         if os.path.exists(ts_output):
             try:
                 os.remove(ts_output)
@@ -273,8 +289,10 @@ def download_from_stream_url(
     Automatically detects whether the URL is an HLS/DASH manifest or a
     direct file link and uses the appropriate download strategy.
 
+    Also supports local M3U8 file paths (from chunk discovery).
+
     Args:
-        stream_url:        The stream URL to download from.
+        stream_url:        The stream URL or local M3U8 file path.
         output_file:       Path where the downloaded file will be saved.
         cancel_event:      Optional threading.Event for cancellation.
         progress_callback: Optional callback(downloaded_bytes, total_bytes).
@@ -293,9 +311,14 @@ def download_from_stream_url(
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
 
-    if is_streaming_manifest(stream_url):
+    # Check if stream_url is a local file path (M3U8 from chunk discovery)
+    if not stream_url.startswith("http") and os.path.isfile(stream_url):
+        log.info(f"Detected local M3U8 playlist: {stream_url}")
+        if not output_file.lower().endswith(".mp4"):
+            output_file = os.path.splitext(output_file)[0] + ".mp4"
+        _download_hls_segments_local(stream_url, output_file, cancel_event, progress_callback)
+    elif is_streaming_manifest(stream_url):
         log.info(f"Detected streaming manifest URL: {stream_url[:50]}")
-        # Ensure .mp4 extension for output
         if not output_file.lower().endswith(".mp4"):
             output_file = os.path.splitext(output_file)[0] + ".mp4"
         _download_hls_segments(stream_url, output_file, cancel_event, progress_callback)

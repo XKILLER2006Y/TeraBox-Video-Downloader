@@ -17,6 +17,7 @@ from .progress_callbacks import make_download_progress_cb, make_upload_progress_
 from terabox.public_api import TeraBoxError, CancelledError
 from teraboxDL.public_api import download_terabox_file_experimental
 from diskwalaDL.public_api import get_diskwala_info, extract_diskwala_id, DiskwalaError
+from diskwalaDL.diskwala_dl import DiskwalaDirectError
 
 log = logging.getLogger(__name__)
 
@@ -110,6 +111,11 @@ async def _dw_helper(event, diskwala_url: str) -> None:
     #! GET FILE INFO
     try:
         info = await asyncio.to_thread(get_diskwala_info, diskwala_url)
+    except DiskwalaDirectError as e:
+        log.error(f"Diskwala direct resolution failed for {link_id}: {e}")
+        await _safe_send(status.edit, f"❌ {e}")
+        active_tasks.pop(task_key, None)
+        return
     except DiskwalaError as e:
         log.error(f"Diskwala metadata fetch failed for {link_id}: {e}")
         await _safe_send(status.edit, f"❌ Failed to get video info: {e}")
