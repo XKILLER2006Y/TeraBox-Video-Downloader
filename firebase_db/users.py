@@ -23,7 +23,6 @@ import time
 from typing import Literal
 
 from google.cloud.firestore_v1 import DELETE_FIELD  # noqa: F401 — available if needed
-from firebase_admin import firestore as _fs
 
 from .db import db
 

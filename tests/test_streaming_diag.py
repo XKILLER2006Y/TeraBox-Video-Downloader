@@ -20,7 +20,7 @@ import random
 import logging
 import textwrap
 import requests
-from urllib.parse import unquote, urlparse, urlencode, parse_qs, urlunparse
+from urllib.parse import unquote, urlparse, urlencode, parse_qs
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -727,7 +727,7 @@ def main():
     surl = extract_surl(test_url)
 
     print(f"\n{BOLD}{'▓'*64}")
-    print(f"  TeraBox Streaming Pipeline — Deep Diagnostic")
+    print("  TeraBox Streaming Pipeline — Deep Diagnostic")
     print(f"{'▓'*64}{RESET}")
     print(f"  URL:  {test_url}")
     print(f"  surl: {surl}")
@@ -808,11 +808,11 @@ def _print_summary(diag: DiagResult):
     else:
         print(f"  {RED}{BOLD}Issues detected — see findings above.{RESET}")
         print(f"\n  {YELLOW}Suggested next steps:{RESET}")
-        print(f"    1. If the domain changed → update BASE_DOMAIN in internal_helpers.py")
-        print(f"    2. If streaming returns JSON errors → cookies may be expired or rate-limited")
-        print(f"    3. If M3U8 segment URL format changed → update chunk-index regex in core_pipeline.py")
-        print(f"    4. If alternative endpoints return dlinks → consider a direct-download fallback")
-        print(f"    5. If jsToken patterns failed → update regex in get_js_token()")
+        print("    1. If the domain changed → update BASE_DOMAIN in internal_helpers.py")
+        print("    2. If streaming returns JSON errors → cookies may be expired or rate-limited")
+        print("    3. If M3U8 segment URL format changed → update chunk-index regex in core_pipeline.py")
+        print("    4. If alternative endpoints return dlinks → consider a direct-download fallback")
+        print("    5. If jsToken patterns failed → update regex in get_js_token()")
         print()
 
 

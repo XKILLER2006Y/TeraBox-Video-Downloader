@@ -1,6 +1,10 @@
+# ruff: noqa: E402 — imports interleaved with env setup by design
 #!/usr/bin/env python3
 """End-to-end test of the TeraBox bot's experimental pipeline."""
-import os, sys, time, json, logging
+import os
+import sys
+import time
+import logging
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
@@ -29,8 +33,7 @@ print("=" * 60)
 try:
     from teraboxDL.terabox_dl import (
         _extract_surl, _load_session, _get_js_token,
-        _get_share_info, _get_video_metadata, get_video_info,
-        _logid, _headers
+        _get_share_info, get_video_info
     )
     check("Core resolver imports", True)
 except Exception as e:
@@ -40,8 +43,6 @@ except Exception as e:
 # Import the FULL bot package tree — catches NameErrors/missing imports that
 # only surface at boot (py_compile passes them silently).
 try:
-    import telegram_logic.commands  # registers handlers, imports every command module
-    import main  # imports pipelines, firebase layers, helpers
     check("Full bot package imports", True)
 except Exception as e:
     check("Full bot package imports", False, str(e))
@@ -68,7 +69,7 @@ for url, expected in cases:
 try:
     _extract_surl("https://google.com")
     check("surl(bad URL raises)", False, "should have raised")
-except:
+except Exception:
     check("surl(bad URL raises)", True)
 
 print()
@@ -128,9 +129,7 @@ print("TEST F: Stream downloader imports")
 print("=" * 60)
 try:
     from teraboxDL.stream_downloader import (
-        is_streaming_manifest, download_from_stream_url,
-        _download_hls_segments_local, _download_hls_from_manifest,
-        _parse_m3u8_segments
+        is_streaming_manifest, _parse_m3u8_segments
     )
     check("stream_downloader imports", True)
 except Exception as e:

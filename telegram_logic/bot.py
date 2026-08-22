@@ -1,10 +1,8 @@
 import os
-import time 
 import threading
 import asyncio
 import logging
-from telethon import TelegramClient, Button
-from telethon.errors import FloodWaitError
+from telethon import TelegramClient
 
 from firebase_db.cache import search_in_cache
 
@@ -13,8 +11,8 @@ load_dotenv()
 
 log = logging.getLogger(__name__)
 
-from .queue import MessageQueue
-from .helpers import env_int
+from .queue import MessageQueue  # noqa: E402 — log setup first
+from .helpers import env_int  # noqa: E402
 
 # — Concurrency & Flood-Wait Queue ————————————————————————————————————————————
 # We still need a semaphore because:

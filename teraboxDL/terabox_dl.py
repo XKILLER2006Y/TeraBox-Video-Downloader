@@ -136,7 +136,7 @@ def _get_share_info(session: requests.Session, js_token: str, surl: str) -> dict
 
     try:
         resp = session.get(f"{BASE_URL}/api/shorturlinfo", params=params, headers=hdrs, timeout=60)
-    except requests.ConnectionError as e:
+    except requests.ConnectionError:
         raise TeraBoxDirectError("Cannot reach TeraBox servers. Check your internet connection.")
     except requests.Timeout:
         raise TeraBoxDirectError("TeraBox API timed out. The server may be overloaded. Try again later.")

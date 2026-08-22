@@ -105,7 +105,7 @@ async def helper(event, surl: str) -> None:
             return
 
         # — Phase 2: Prepare metadata ——————————————————————————————————————————
-        await _safe_send(status.edit, f"⏳ Fetching metadata…", buttons=cancel_btn)
+        await _safe_send(status.edit, "⏳ Fetching metadata…", buttons=cancel_btn)
         
         try:
             prepared = await asyncio.to_thread(prepare_terabox_link, surl)

@@ -22,7 +22,6 @@ import time
 import threading
 import logging
 import asyncio
-import hashlib
 from urllib.parse import urlparse, unquote
 
 import requests
@@ -71,8 +70,6 @@ def _decrypt_diskwala_response(encrypted_obj: dict) -> dict:
     Mini App JS bundle, returning the plaintext JSON as a dict.
     """
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-    from cryptography.hazmat.primitives import hashes
-    from cryptography.hazmat.backends import default_backend
 
     if not encrypted_obj.get("_x"):
         return encrypted_obj
@@ -311,7 +308,6 @@ def get_diskwala_info_direct(diskwala_url: str) -> dict:
         if _token_cache["token"] and (now - _token_cache["fetched_at"]) < _TOKEN_TTL_SECONDS:
             auth_token = _token_cache["token"]
         else:
-            import concurrent.futures
             fut = asyncio.run_coroutine_threadsafe(
                 _get_auth_token(), _get_auth_loop()
             )

@@ -4,7 +4,6 @@ and monitors responses.
 """
 import requests
 import time
-import json
 import sys
 import os
 from dotenv import load_dotenv

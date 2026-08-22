@@ -4,7 +4,6 @@ import os
 # Add the parent directory to sys.path so we can import 'terabox'
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-import requests
 import json
 from terabox.public_api import prepare_terabox_link, STORAGE_DIR
 from terabox.core_pipeline import discover_all_hls_chunks, download_all_chunks, concatenate_chunks_ffmpeg, build_streaming_url

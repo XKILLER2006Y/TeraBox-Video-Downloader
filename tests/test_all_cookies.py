@@ -37,7 +37,7 @@ def main():
             try:
                 data = json.loads(text)
                 print(f"[COOKIE {i+1}] FAILED - errno={data.get('errno')} ({data.get('errmsg', '')})")
-            except:
+            except Exception:
                 print(f"[COOKIE {i+1}] FAILED - Unknown response")
 
 if __name__ == "__main__":

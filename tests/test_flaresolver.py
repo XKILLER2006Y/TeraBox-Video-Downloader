@@ -341,11 +341,11 @@ def main():
     else:
         print(f"  {RED}{BOLD}Some checks failed. See details above.{RESET}")
         print(f"\n  {YELLOW}Common fixes:{RESET}")
-        print(f"    1. If 'body' is missing → the proxy response format changed.")
-        print(f"       Update terabox_dl.py line 45-48 to handle the new structure.")
-        print(f"    2. If download URLs are empty → the third-party API failed to")
-        print(f"       generate download tokens. Try a different TeraBox URL.")
-        print(f"    3. If proxy is unreachable → check PROXY_URL in .env\n")
+        print("    1. If 'body' is missing → the proxy response format changed.")
+        print("       Update terabox_dl.py line 45-48 to handle the new structure.")
+        print("    2. If download URLs are empty → the third-party API failed to")
+        print("       generate download tokens. Try a different TeraBox URL.")
+        print("    3. If proxy is unreachable → check PROXY_URL in .env\n")
 
 
 if __name__ == "__main__":

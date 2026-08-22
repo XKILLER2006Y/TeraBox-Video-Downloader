@@ -37,10 +37,10 @@ async def global_tracker(event):
         log.error(f"[global_tracker] Unexpected error in track_user: {e}")
     # Does not raise StopPropagation, allowing other handlers to execute
 
-import telegram_logic.commands  # registers all @bot.on(...) handlers  # noqa: F401
+import telegram_logic.commands  # registers all @bot.on(...) handlers  # noqa: E402, F401
 
-from dotenv import load_dotenv
-load_dotenv()
+from dotenv import load_dotenv  # noqa: E402
+load_dotenv()  # noqa: E402
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 APP_ID = env_int("APP_ID")
@@ -88,7 +88,7 @@ async def handle_message(event):
                 await event.respond(DISKWALA_IN_TERABOX_MODE)
             return  # silently ignore non-TeraBox messages
         try:
-            log.info(f"Message redirected to [get] mode")
+            log.info("Message redirected to [get] mode")
             await asyncio.gather(*[process_terabox(event, surl) for surl in surls])
         except Exception as e:
             log.error(f"Unhandled error in handle_message: {e}")
@@ -100,7 +100,7 @@ async def handle_message(event):
                 await event.respond(DISKWALA_IN_TERABOX_MODE)
             return  # silently ignore non-TeraBox messages
         try:
-            log.info(f"Message redirected to [exp] mode")
+            log.info("Message redirected to [exp] mode")
             await asyncio.gather(*[process_terabox_experimental(event, surl) for surl in terabox_url_list])
         except Exception as e:
             log.error(f"Unhandled error in handle_message: {e}")
@@ -112,7 +112,7 @@ async def handle_message(event):
                 await event.respond(DISKWALA_IN_TERABOX_MODE)
             return  # silently ignore non-TeraBox messages
         try:
-            log.info(f"Message redirected to [exphd] mode")
+            log.info("Message redirected to [exphd] mode")
             await asyncio.gather(*[process_terabox_experimental(event, surl, is_hd=True) for surl in terabox_url_list])
         except Exception as e:
             log.error(f"Unhandled error in handle_message: {e}")
@@ -124,7 +124,7 @@ async def handle_message(event):
                 await event.respond(TERABOX_IN_DISKWALA_MODE)
             return  # silently ignore non-Diskwala messages
         try:
-            log.info(f"Message redirected to [dw] mode")
+            log.info("Message redirected to [dw] mode")
             await asyncio.gather(*[process_diskwala(event, url) for url in diskwala_url_list])
         except Exception as e:
             log.error(f"Unhandled error in handle_message: {e}")

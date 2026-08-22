@@ -1,13 +1,10 @@
 import sys
 import os
-import requests
 import json
-import random
 import time
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from terabox.public_api import prepare_terabox_link
-from terabox.core_pipeline import build_streaming_url
 from terabox.internal_helpers import _headers, _logid, BASE_URL
 
 def probe_qualities(session, prepared):
@@ -53,9 +50,9 @@ def probe_qualities(session, prepared):
                             # We expect 130 or -6 etc
                             if errno != 130:
                                 print(f"[*] clienttype={ctype}, app={app}, channel={ch} -> errno={errno}")
-                        except:
+                        except Exception:
                             print(f"[*] clienttype={ctype}, app={app}, channel={ch} -> Unknown response")
-                except Exception as e:
+                except Exception:
                     pass
                 time.sleep(0.5)
 

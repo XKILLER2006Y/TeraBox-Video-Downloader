@@ -75,7 +75,7 @@ def download_terabox_file_experimental(
     try:
         if is_streaming_manifest(download_url):
             # Use ffmpeg-based stream downloader for HLS/DASH manifests
-            print(f"    [Stream] Detected HLS/DASH manifest, using ffmpeg...")
+            print("    [Stream] Detected HLS/DASH manifest, using ffmpeg...")
             download_from_stream_url(download_url, mp4_path, cancel_event, progress_callback)
         else:
             _download_video(download_url, mp4_path, cancel_event, progress_callback)

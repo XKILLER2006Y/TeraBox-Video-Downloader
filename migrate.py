@@ -1,7 +1,6 @@
 import json
 import time
 import os
-from firebase_admin import firestore
 from firebase_db.db import db
 from firebase_db.cache import _encode_key
 import logging

@@ -1,11 +1,8 @@
-import os
 import asyncio
 import logging
 from telethon import events
 from telethon.errors import FloodWaitError
 from telethon.tl.types import (
-    MessageMediaPhoto,
-    MessageMediaDocument,
     MessageMediaWebPage,
 )
 from ..bot import bot

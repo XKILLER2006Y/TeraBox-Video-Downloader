@@ -117,7 +117,7 @@ async def helper(event, terabox_url: str, is_hd: bool) -> None:
             return
 
         # — Phase 2: Prepare metadata ——————————————————————————————————————————
-        await _safe_send(status.edit, f"⏳ Fetching metadata…", buttons=cancel_btn)
+        await _safe_send(status.edit, "⏳ Fetching metadata…", buttons=cancel_btn)
 
         #! GET FILE INFO
         try:

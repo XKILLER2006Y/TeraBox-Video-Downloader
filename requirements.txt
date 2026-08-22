@@ -1,7 +1,21 @@
 # ffmpeg needed in system
-telethon
-requests
-python-dotenv
-fastapi
-uvicorn[standard]
-firebase-admin
+
+# Telegram
+Telethon==1.44.0
+pyaes==1.6.1
+rsa==4.9.1
+
+# HTTP / config
+requests==2.34.2
+python-dotenv==1.2.3
+
+# API server
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+
+# Firebase (cache + user tracking)
+firebase-admin==7.5.0
+google-cloud-firestore==2.28.1
+
+# Diskwala _x response decryption (AES-256-GCM)
+cryptography==50.0.0

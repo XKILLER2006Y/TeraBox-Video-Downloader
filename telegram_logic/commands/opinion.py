@@ -1,4 +1,3 @@
-import os
 import logging
 from telethon import events
 from ..bot import bot
