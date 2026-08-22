@@ -142,6 +142,20 @@ async def run_bot() -> None:
 
     await bot.start(bot_token=BOT_TOKEN)
 
+    # Validate the storage group is reachable — a fresh bot session cannot
+    # resolve peers it has never seen, which silently disables caching and
+    # wastes a full pre-upload on every request before failing over.
+    if STORAGE_GROUP_ID:
+        try:
+            await bot.get_input_entity(STORAGE_GROUP_ID)
+            log.info(f"Storage group {STORAGE_GROUP_ID} reachable — caching enabled.")
+        except Exception as e:
+            log.error(
+                f"STORAGE_GROUP_ID {STORAGE_GROUP_ID} is NOT accessible to this bot ({e}). "
+                f"Add the bot as an admin/member to that group or channel, then restart. "
+                f"Continuing WITHOUT caching — videos will be uploaded separately per user."
+            )
+
     default_commands = [ 
         BotCommand(command="start", description="Start BOT"),
         BotCommand(command="exp", description="[Experimental] Download TeraBox video"), 
