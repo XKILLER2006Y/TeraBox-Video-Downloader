@@ -32,9 +32,19 @@ try:
         _get_share_info, _get_video_metadata, get_video_info,
         _logid, _headers
     )
-    check("All imports", True)
+    check("Core resolver imports", True)
 except Exception as e:
-    check("All imports", False, str(e))
+    check("Core resolver imports", False, str(e))
+    sys.exit(1)
+
+# Import the FULL bot package tree — catches NameErrors/missing imports that
+# only surface at boot (py_compile passes them silently).
+try:
+    import telegram_logic.commands  # registers handlers, imports every command module
+    import main  # imports pipelines, firebase layers, helpers
+    check("Full bot package imports", True)
+except Exception as e:
+    check("Full bot package imports", False, str(e))
     sys.exit(1)
 
 print()

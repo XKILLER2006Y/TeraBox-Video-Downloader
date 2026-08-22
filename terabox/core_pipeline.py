@@ -12,6 +12,9 @@ from urllib.parse import unquote, urlparse, urlunparse, urlencode, parse_qs
 def load_session() -> requests.Session:
     session = requests.Session()
     # May user something like rounds-robin to make it more robust, AIM: PREVENT SHADOW BANS
+    if not CookiesList:
+        print("[!] No COOKIESn env vars set — continuing without cookies")
+        return session
     cookie_str = random.choice(CookiesList)
     count = 0
     if cookie_str:
@@ -60,9 +63,14 @@ def get_share_info(session: requests.Session, js_token: str, surl: str) -> dict:
     }
     hdrs = _headers(session, surl)
     hdrs.update({"Accept": "application/json, text/plain, */*", "Origin": BASE_URL})
-    data = session.get(
-        f"{BASE_URL}/api/shorturlinfo", params=params, headers=hdrs, timeout=60
-    ).json()
+    try:
+        data = session.get(
+            f"{BASE_URL}/api/shorturlinfo", params=params, headers=hdrs, timeout=60
+        ).json()
+    except ValueError:
+        raise TeraBoxError(
+            "TeraBox returned a non-JSON response (page error or rate limit). Try again."
+        )
     if data.get("errno") != 0:
         raise TeraBoxError(f"shorturlinfo failed: errno={data.get('errno')}")
     return data

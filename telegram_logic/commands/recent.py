@@ -6,7 +6,7 @@ from datetime import datetime, timezone, timedelta
 from telethon import events
 from ..bot import bot
 from firebase_db.users import get_all_users
-from ..helpers import format_duration
+from ..helpers import env_int, format_duration
 
 log = logging.getLogger(__name__)
 
