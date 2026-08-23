@@ -103,7 +103,7 @@ check_env_key() {
         found { val = val "\n" $0 }
         END { print val }
     ' "$ENV_FILE" | tr -d '[:space:]')
-    [ -z "$val" ] && missing+=("$key")
+    if [ -z "$val" ]; then missing+=("$key"); fi
 }
 
 check_env_key "BOT_TOKEN"
