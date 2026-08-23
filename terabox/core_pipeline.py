@@ -1,20 +1,23 @@
 import os
-import requests
 import re
 import time
 import subprocess
 import threading
 import random
+import logging
+import requests
 from concurrent.futures import ThreadPoolExecutor
 from .internal_helpers import BASE_URL, _headers, _logid, TeraBoxError, CancelledError, BYTES_PER_MB, CookiesList
 from urllib.parse import unquote, urlparse, urlunparse, urlencode, parse_qs
+from network import get_session
+
+log = logging.getLogger(__name__)
 
 # ── Core Pipeline ─────────────────────────────────────────────────────────────
 def load_session() -> requests.Session:
-    session = requests.Session()
-    # May user something like rounds-robin to make it more robust, AIM: PREVENT SHADOW BANS
+    session = get_session()
     if not CookiesList:
-        print("[!] No COOKIESn env vars set — continuing without cookies")
+        log.info("No COOKIESn env vars set — continuing without cookies")
         return session
     cookie_str = random.choice(CookiesList)
     count = 0
@@ -24,7 +27,7 @@ def load_session() -> requests.Session:
                 k, v = c.strip().split("=", 1)
                 session.cookies.set(k.strip(), v.strip(), domain=".1024tera.com", path="/")
                 count += 1
-    print(f"[+] Loaded {count} cookies")
+    log.info(f"Loaded {count} cookies")
     return session
 
 
@@ -51,7 +54,7 @@ def get_js_token(session: requests.Session, surl: str) -> str:
             last_err = str(e)
             
         if attempt < 2:
-            time.sleep(2)
+            time.sleep(0.5)
             
     raise TeraBoxError(f"Could not extract jsToken from share page after 3 attempts: {last_err}")
 
@@ -112,7 +115,7 @@ def discover_all_hls_chunks(session: requests.Session, shareid, uk, sign, timest
             return []
 
         if not text.startswith("#EXTM3U"):
-            time.sleep(0.2)
+            time.sleep(0.05)
             return []
 
         segs = [l.strip() for l in text.split("\n") if l.strip() and not l.startswith("#")]
@@ -135,7 +138,7 @@ def discover_all_hls_chunks(session: requests.Session, shareid, uk, sign, timest
             full_url = urlunparse(parsed._replace(query=urlencode({k: v[0] for k, v in p.items()})))
             results.append((chunk_idx, full_url, ts_size))
 
-        time.sleep(0.15)
+        time.sleep(0.08)
         return results
 
     def is_complete():
@@ -145,7 +148,7 @@ def discover_all_hls_chunks(session: requests.Session, shareid, uk, sign, timest
             return False
         return len(known) == max(known) - min(known) + 1
 
-    print("    Scanning for chunks (random polling)...", flush=True)
+    log.info("    Scanning for chunks (random polling)...")
     known = {}
     no_new_max_streak = 0
     max_known_idx = -1
@@ -171,17 +174,17 @@ def discover_all_hls_chunks(session: requests.Session, shareid, uk, sign, timest
         if known and is_complete():
             confidence = max(10, max_known_idx)
             if no_new_max_streak >= confidence:
-                print(f"      ✓ All chunks collected (streak: {no_new_max_streak})", flush=True)
+                log.info(f"      ✓ All chunks collected (streak: {no_new_max_streak})")
                 break
 
         budget = min(100, max(30, max_known_idx * 3)) if max_known_idx > 0 else 30
         if req_count >= budget:
-            print(f"      ✓ Budget reached ({budget} reqs)", flush=True)
+            log.info(f"      ✓ Budget reached ({budget} reqs)")
             break
 
         if req_count % 10 == 0:
-            print(f"      ... {req_count} reqs, {len(known)} chunks found"
-                  f" (max: {max_known_idx}, streak: {no_new_max_streak})", flush=True)
+            log.info(f"      ... {req_count} reqs, {len(known)} chunks found"
+                  f" (max: {max_known_idx}, streak: {no_new_max_streak})")
 
     if not known:
         raise TeraBoxError("Could not find any video chunks from the API.")
@@ -191,9 +194,9 @@ def discover_all_hls_chunks(session: requests.Session, shareid, uk, sign, timest
     missing = [i for i in range(first_idx, last_idx + 1) if i not in known]
 
     if missing:
-        print(f"      ⚠ Missing chunks: {missing}", flush=True)
+        log.warning(f"      ⚠ Missing chunks: {missing}")
 
-    print(f"      ✓ Done — {len(known)}/{total} chunks | API requests: {req_count}", flush=True)
+    log.info(f"      ✓ Done — {len(known)}/{total} chunks | API requests: {req_count}")
 
     return [known[i] for i in sorted(known)]
 
@@ -214,7 +217,7 @@ def _download_segment(session: requests.Session, url: str, path: str, expected_s
             if actual < 512:
                 raise TeraBoxError("Segment too small (< 512 bytes)")
             if expected_size > 0 and abs(actual - expected_size) / expected_size > 0.20:
-                print(f" ⚠ size mismatch (expected {expected_size}, got {actual})", end="", flush=True)
+                log.warning(f" ⚠ size mismatch (expected {expected_size}, got {actual})")
             return
         except CancelledError:
             raise
@@ -222,14 +225,14 @@ def _download_segment(session: requests.Session, url: str, path: str, expected_s
             if attempt == 2:
                 raise TeraBoxError(f"Chunk failed after 3 attempts: {e}")
             backoff = min(1.5 * (attempt + 1), 4.0)
-            print(f" [Retry {attempt + 1} - sleep {backoff:.1f}s]", end="", flush=True)
+            log.info(f" [Retry {attempt + 1} - sleep {backoff:.1f}s]")
             time.sleep(backoff)
 
 
 def download_all_chunks(session: requests.Session, chunks: list, tmp_dir: str, surl: str = "", cancel_event: threading.Event | None = None, progress_callback=None) -> None:
     os.makedirs(tmp_dir, exist_ok=True)
     total = len(chunks)
-    print(f"    Downloading {total} chunk(s) (parallel)...")
+    log.info(f"    Downloading {total} chunk(s) (parallel)...")
 
     total_size = sum(ts for _, _, ts in chunks)
     shared_done = [0]  # mutable counter shared across threads
@@ -241,13 +244,12 @@ def download_all_chunks(session: requests.Session, chunks: list, tmp_dir: str, s
         if cancel_event and cancel_event.is_set():
             raise CancelledError("Download cancelled")
         seg_path = os.path.join(tmp_dir, f"chunk_{idx:03d}.ts")
-        print(f"      [{i}/{total}] Chunk {idx} ({ts_size / BYTES_PER_MB:.1f} MB)...", end="", flush=True)
+        log.info(f"      [{i}/{total}] Chunk {idx} ({ts_size / BYTES_PER_MB:.1f} MB)...")
         _download_segment(session, url, seg_path, ts_size, surl, cancel_event)
         if os.path.exists(seg_path):
             with progress_lock:
                 shared_done[0] += os.path.getsize(seg_path)
                 done = shared_done[0]
-        print()
         if progress_callback:
             progress_callback(done, total_size)
 
@@ -257,14 +259,14 @@ def download_all_chunks(session: requests.Session, chunks: list, tmp_dir: str, s
 
     elapsed = time.time() - _start
     speed = (total_size / (1024 * 1024)) / elapsed if elapsed > 0 else 0
-    print(f"    ✓ Downloaded {total_size / (1024 * 1024):.1f} MB in {elapsed:.1f}s ({speed:.1f} MB/s)")
+    log.info(f"    ✓ Downloaded {total_size / (1024 * 1024):.1f} MB in {elapsed:.1f}s ({speed:.1f} MB/s)")
 
 
 def concatenate_chunks_ffmpeg(tmp_dir: str, chunks: list, mp4_path: str, cancel_event: threading.Event | None = None) -> None:
     if cancel_event and cancel_event.is_set():
         raise CancelledError("Concatenation cancelled")
         
-    print("    Demuxing and merging chunks via ffmpeg...")
+    log.info("    Demuxing and merging chunks via ffmpeg...")
     concat_txt = os.path.join(tmp_dir, "concat.txt")
     
     with open(concat_txt, "w", encoding="utf-8") as f:

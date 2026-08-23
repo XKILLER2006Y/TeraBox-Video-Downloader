@@ -1,6 +1,7 @@
 import threading
 import os
 import hashlib
+import logging
 import requests
 import time
 import random
@@ -10,6 +11,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from terabox.internal_helpers import _safe_filename, TeraBoxError, CancelledError
 from teraboxDL.stream_downloader import is_streaming_manifest, download_from_stream_url
 from network import get_session
+
+log = logging.getLogger(__name__)
 
 STORAGE_DIR = "storage"
 CHUNK_SIZE = 1 * 1024 * 1024  # 1 MB per read chunk within each part
@@ -63,17 +66,16 @@ def download_terabox_file_experimental(
     try:
         if is_streaming_manifest(download_url):
             # Use ffmpeg-based stream downloader for HLS/DASH manifests
-            print("    [Stream] Detected HLS/DASH manifest, using ffmpeg...")
+            log.info("Detected HLS/DASH manifest, using ffmpeg...")
             download_from_stream_url(download_url, mp4_path, cancel_event, progress_callback)
         else:
             _download_video(download_url, mp4_path, cancel_event, progress_callback)
 
-        print()  # newline after progress
-        print(f"    Download Completed! {mp4_path}")
+        log.info(f"Download Completed! {mp4_path}")
         return mp4_path
 
     except Exception as e:
-        print(f"\n    Failed: {e}")
+        log.error(f"Download failed: {e}")
         if os.path.exists(mp4_path):
             os.remove(mp4_path)
             
@@ -101,7 +103,6 @@ def _check_range_support(session: requests.Session, download_url: str) -> int:
 
 
 def _download_part(
-    session: requests.Session,
     download_url: str,
     byte_start: int,
     byte_end: int,
@@ -115,16 +116,17 @@ def _download_part(
     progress_callback,
 ) -> None:
     """Download a single byte-range part of the file to part_path."""
-    # Set Referer on per-part session (CDN may throttle/reject without it)
+    # Each thread gets its own session to avoid header mutation race on singleton
+    part_session = get_session()
     parsed = urlparse(download_url)
-    session.headers["Referer"] = f"{parsed.scheme}://{parsed.netloc}/"
+    referer = f"{parsed.scheme}://{parsed.netloc}/"
 
-    headers = {"Range": f"bytes={byte_start}-{byte_end}"}
+    headers = {"Range": f"bytes={byte_start}-{byte_end}", "Referer": referer}
     for attempt in range(4):
         if cancel_event and cancel_event.is_set():
             raise CancelledError("Download cancelled")
         try:
-            r = session.get(download_url, headers=headers, stream=True, timeout=120)
+            r = part_session.get(download_url, headers=headers, stream=True, timeout=120)
             r.raise_for_status()
             with open(part_path, "wb") as f:
                 for chunk in r.iter_content(CHUNK_SIZE):
@@ -141,13 +143,12 @@ def _download_part(
                     if total_size > 0:
                         total_mb = total_size / (1024 * 1024)
                         pct = (done / total_size) * 100
-                        print(
-                            f"\r    Downloading: {done_mb:.2f} / {total_mb:.2f} MB"
-                            f"  ({pct:.0f}%)  {speed:.1f} MB/s  [part {part_index+1}/{PARALLEL_PARTS}]",
-                            end="", flush=True,
+                        log.debug(
+                            f"Downloading: {done_mb:.2f} / {total_mb:.2f} MB"
+                            f"  ({pct:.0f}%)  {speed:.1f} MB/s  [part {part_index+1}/{PARALLEL_PARTS}]"
                         )
                     else:
-                        print(f"\r    Downloading: {done_mb:.2f} MB  {speed:.1f} MB/s", end="", flush=True)
+                        log.debug(f"Downloading: {done_mb:.2f} MB  {speed:.1f} MB/s [part {part_index+1}/{PARALLEL_PARTS}]")
 
                     if progress_callback:
                         progress_callback(done, total_size)
@@ -158,7 +159,7 @@ def _download_part(
             if attempt == 3:
                 raise TeraBoxError(f"Part {part_index} failed after 4 attempts: {e}")
             backoff = (2 ** attempt) + random.uniform(0.5, 2.0)
-            print(f"\n [Part {part_index} retry {attempt+1} – sleep {backoff:.1f}s]", end="", flush=True)
+            log.info(f"[Part {part_index} retry {attempt+1} – sleep {backoff:.1f}s]")
             time.sleep(backoff)
 
 
@@ -191,7 +192,6 @@ def _download_video_multipart(
             futures = {
                 executor.submit(
                     _download_part,
-                    _build_session(),          # each part gets its own session/connection
                     download_url,
                     ranges[i][0], ranges[i][1],
                     part_paths[i],
@@ -235,15 +235,15 @@ def _download_video(
     progress_callback=None,
 ) -> None:
     session = _build_session()
-    # Set Referer to the download URL's origin (some CDNs check this)
+    # Use a per-request Referer header (don't mutate singleton)
     parsed = urlparse(download_url)
-    session.headers["Referer"] = f"{parsed.scheme}://{parsed.netloc}/"
+    referer = f"{parsed.scheme}://{parsed.netloc}/"  # noqa: F841 — used in _download_part headers
 
     # Check if the CDN supports byte-range requests
     total_size = _check_range_support(session, download_url)
 
     if total_size > 0:
-        print(f"    [MultiPart] Server supports Range. Splitting into {PARALLEL_PARTS} parts ({total_size/(1024*1024):.1f} MB total).")
+        log.info(f"[MultiPart] Server supports Range. Splitting into {PARALLEL_PARTS} parts ({total_size/(1024*1024):.1f} MB total).")
         _download_video_multipart(session, download_url, download_path, total_size, cancel_event, progress_callback)
 
         actual = os.path.getsize(download_path)
@@ -254,7 +254,7 @@ def _download_video(
         return
 
     # ---- Fallback: single-stream download (server doesn't support Range) ----
-    print("    [SingleStream] Server does not support Range requests. Falling back to single stream.")
+    log.info("[SingleStream] Server does not support Range requests. Falling back to single stream.")
     for attempt in range(4):
         if cancel_event and cancel_event.is_set():
             raise CancelledError("Download cancelled")
@@ -273,16 +273,16 @@ def _download_video(
                     f.write(chunk)
                     done_size += len(chunk)
 
-                    # Progress display
+                    # Progress display (debug level — 1000+ lines for large files)
                     done_mb = done_size / (1024 * 1024)
                     elapsed = time.time() - start_time
                     speed = (done_size / (1024 * 1024)) / elapsed if elapsed > 0 else 0
                     if total_size > 0:
                         total_mb = total_size / (1024 * 1024)
                         pct = (done_size / total_size) * 100
-                        print(f"\r    Downloading: {done_mb:.2f} / {total_mb:.2f} MB  ({pct:.0f}%)  {speed:.1f} MB/s", end="", flush=True)
+                        log.debug(f"Downloading: {done_mb:.2f} / {total_mb:.2f} MB  ({pct:.0f}%)  {speed:.1f} MB/s")
                     else:
-                        print(f"\r    Downloading: {done_mb:.2f} MB  {speed:.1f} MB/s", end="", flush=True)
+                        log.debug(f"Downloading: {done_mb:.2f} MB  {speed:.1f} MB/s")
 
                     if progress_callback:
                         progress_callback(done_size, total_size)
@@ -298,5 +298,5 @@ def _download_video(
                 raise TeraBoxError(f"Chunk failed after 4 attempts: {e}")
 
             backoff = (2 ** attempt) + random.uniform(1.0, 3.0)
-            print(f"\n [Retry {attempt + 1} - sleep {backoff:.1f}s]", end="", flush=True)
+            log.info(f"[Retry {attempt + 1} - sleep {backoff:.1f}s]")
             time.sleep(backoff)

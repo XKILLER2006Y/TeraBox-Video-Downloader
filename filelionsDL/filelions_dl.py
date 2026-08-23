@@ -11,6 +11,7 @@ No auth needed.
 import re
 import logging
 import requests
+from network import get_session
 from urllib.parse import urljoin
 
 logger = logging.getLogger(__name__)
@@ -67,7 +68,7 @@ def resolve_filelions(url: str, session: requests.Session | None = None) -> dict
     Resolve a FileLions URL.
     Returns: {"filename": str, "size": int, "download_url": str, "headers": dict}
     """
-    sess = session or requests.Session()
+    sess = session or get_session()
     sess.headers.update({
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0',
     })

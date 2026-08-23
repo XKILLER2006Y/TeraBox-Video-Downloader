@@ -1,9 +1,7 @@
 import re
 import random
 import requests
-import os 
-from dotenv import load_dotenv
-load_dotenv()
+import os
 
 BASE_DOMAIN = "dm.1024tera.com"
 BASE_URL = f"https://{BASE_DOMAIN}"

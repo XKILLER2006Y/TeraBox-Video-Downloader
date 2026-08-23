@@ -191,8 +191,9 @@ def _discover_all_hls_chunks(session, shareid, uk, sign, timestamp, fs_id, surl,
     max_known_idx = -1
     no_new_max_streak = 0
     max_retries = 100
+    deadline = time.monotonic() + 120  # 2-minute hard limit
 
-    while req_count < max_retries:
+    while req_count < max_retries and time.monotonic() < deadline:
         req_count += 1
         url = _build_streaming_url(shareid, uk, sign, timestamp, fs_id, quality)
         try:
@@ -203,7 +204,7 @@ def _discover_all_hls_chunks(session, shareid, uk, sign, timestamp, fs_id, surl,
             continue
 
         if not text.startswith("#EXTM3U"):
-            time.sleep(0.15)
+            time.sleep(0.05)
             continue
 
         segs = [l.strip() for l in text.split("\n") if l.strip() and not l.startswith("#")]

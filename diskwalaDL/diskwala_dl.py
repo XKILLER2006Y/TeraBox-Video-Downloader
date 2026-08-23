@@ -268,6 +268,7 @@ _auth_loop_ready = threading.Event()
 # Mini App initData tokens stay valid for hours — cache to avoid a Telegram
 # roundtrip (RequestAppWebViewRequest) on every single resolution request.
 _token_cache: dict = {"token": "", "fetched_at": 0.0}
+_token_cache_lock = threading.Lock()
 _TOKEN_TTL_SECONDS = 3600  # 1 hour, conservative
 
 
@@ -305,18 +306,23 @@ def get_diskwala_info_direct(diskwala_url: str) -> dict:
     if not DISKWALA_SESSION:
         raise DiskwalaDirectError("SESSION not configured")
 
-    # Get auth token via the dedicated auth-loop thread (cached with TTL)
+    # Get auth token via the dedicated auth-loop thread (cached with TTL, thread-safe)
     try:
         now = time.monotonic()
-        if _token_cache["token"] and (now - _token_cache["fetched_at"]) < _TOKEN_TTL_SECONDS:
-            auth_token = _token_cache["token"]
-        else:
+        with _token_cache_lock:
+            if _token_cache["token"] and (now - _token_cache["fetched_at"]) < _TOKEN_TTL_SECONDS:
+                auth_token = _token_cache["token"]
+                fresh = True
+            else:
+                fresh = False
+        if not fresh:
             fut = asyncio.run_coroutine_threadsafe(
                 _get_auth_token(), _get_auth_loop()
             )
             auth_token = fut.result(timeout=60)
-            _token_cache["token"] = auth_token
-            _token_cache["fetched_at"] = time.monotonic()
+            with _token_cache_lock:
+                _token_cache["token"] = auth_token
+                _token_cache["fetched_at"] = time.monotonic()
     except DiskwalaDirectError:
         raise
     except Exception as e:

@@ -25,19 +25,10 @@ import requests
 from urllib.parse import urlparse, urljoin
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from network import get_session
+from network import get_session, _browser_headers as _BROWSER_HEADERS  # noqa: E402
 from terabox.internal_helpers import CancelledError
 
 log = logging.getLogger(__name__)
-
-_BROWSER_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                  "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-    "Accept": "*/*",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Connection": "keep-alive",
-}
 
 # Headers WITHOUT Accept-Encoding to avoid brotli responses that
 # requests can't decode without the brotli package installed.
@@ -136,12 +127,12 @@ def _download_direct_file(
 
                 if total:
                     pct = downloaded / total * 100
-                    log.info(
+                    log.debug(
                         f"Downloading: {pct:5.1f}% "
                         f"({downloaded / 1e6:.1f} MB / {total / 1e6:.1f} MB)"
                     )
                 else:
-                    log.info(f"Downloading: {downloaded / 1e6:.1f} MB")
+                    log.debug(f"Downloading: {downloaded / 1e6:.1f} MB")
 
                 if progress_callback:
                     progress_callback(downloaded, total)
@@ -161,7 +152,7 @@ def _download_hls_segments(
     r = session.get(manifest_url, timeout=30)
     r.raise_for_status()
     manifest_text = r.text
-    log.info(f"Manifest content ({len(manifest_text)} bytes):\n{manifest_text[:200]}...")
+    log.debug(f"Manifest content ({len(manifest_text)} bytes):\n{manifest_text[:200]}...")
 
     _download_hls_from_manifest(manifest_text, manifest_url, output_file, cancel_event, progress_callback)
 
@@ -238,11 +229,10 @@ def _download_hls_from_manifest(
 
                         elapsed = time.time() - start_time
                         speed = (done / (1024 * 1024)) / elapsed if elapsed > 0 else 0
-                        print(
-                            f"\r    Downloading: {done / (1024 * 1024):.2f} MB  "
+                        log.debug(
+                            f"Downloading: {done / (1024 * 1024):.2f} MB  "
                             f"{speed:.1f} MB/s  "
-                            f"[{seg_index + 1}/{num_segments} segments]",
-                            end="", flush=True,
+                            f"[{seg_index + 1}/{num_segments} segments]"
                         )
                         if progress_callback:
                             progress_callback(done, 0)
@@ -274,7 +264,6 @@ def _download_hls_from_manifest(
                     shutil.copyfileobj(p, out)
 
         total_downloaded = os.path.getsize(ts_output)
-        print()
         log.info(f"All segments downloaded: {ts_output} ({total_downloaded / 1e6:.2f} MB)")
 
         ffmpeg_path = shutil.which("ffmpeg")
@@ -361,18 +350,8 @@ def download_from_stream_url(
         log.info("Detected M3U8 manifest text (inline)")
         if not output_file.lower().endswith(".mp4"):
             output_file = os.path.splitext(output_file)[0] + ".mp4"
-        # Write manifest to temp file for the HLS downloader to read
-        import tempfile
-        m3u8_tmp = os.path.join(tempfile.gettempdir(), f"manifest_{id(stream_url) & 0xFFFF:04x}.m3u8")
-        with open(m3u8_tmp, "w") as f:
-            f.write(stream_url)
-        try:
-            _download_hls_segments_local(m3u8_tmp, output_file, cancel_event, progress_callback)
-        finally:
-            try:
-                os.remove(m3u8_tmp)
-            except OSError:
-                pass
+        # Skip temp file — pass manifest text directly to HLS downloader
+        _download_hls_from_manifest(stream_url, "", output_file, cancel_event, progress_callback)
     # Check if stream_url is a local file path (M3U8 from chunk discovery)
     elif not stream_url.startswith("http") and os.path.isfile(stream_url):
         log.info(f"Detected local M3U8 playlist: {stream_url}")

@@ -24,7 +24,7 @@ from typing import Literal
 
 from google.cloud.firestore_v1 import DELETE_FIELD  # noqa: F401 — available if needed
 
-from .db import db
+from .db import get_db
 
 log = logging.getLogger(__name__)
 
@@ -68,7 +68,7 @@ def track_user(chat_id: int, username: str | None) -> None:
         return  # Skip — within debounce window
 
     try:
-        ref = db.collection(_USERS_COLLECTION).document(uid)
+        ref = get_db().collection(_USERS_COLLECTION).document(uid)
 
         if is_new_user:
             # Cold-start: check Firestore to avoid overwriting an existing user
@@ -121,7 +121,7 @@ def get_user_mode(chat_id: int) -> MODE:
 
     try:
         # Cold-start: fetch from Firestore once, then cache
-        snap = db.collection(_USERS_COLLECTION).document(uid).get()
+        snap = get_db().collection(_USERS_COLLECTION).document(uid).get()
         if snap.exists:
             data = snap.to_dict()
             _USERS_CACHE[uid] = data
@@ -142,7 +142,7 @@ def set_user_mode(chat_id: int, mode: MODE) -> bool:
     """
     uid = str(chat_id)
     try:
-        db.collection(_USERS_COLLECTION).document(uid).set(
+        get_db().collection(_USERS_COLLECTION).document(uid).set(
             {"mode": mode},
             merge=True,  # Creates doc if absent; only touches "mode" field
         )
@@ -167,7 +167,7 @@ def get_all_users() -> dict[str, dict]:
     Returns an empty dict on DB error.
     """
     try:
-        docs = db.collection(_USERS_COLLECTION).stream()
+        docs = get_db().collection(_USERS_COLLECTION).stream()
         result: dict[str, dict] = {}
         for doc in docs:
             result[doc.id] = doc.to_dict()

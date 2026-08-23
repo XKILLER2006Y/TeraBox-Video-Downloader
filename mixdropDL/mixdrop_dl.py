@@ -12,6 +12,7 @@ import re
 import logging
 import base64
 import requests
+from network import get_session
 from urllib.parse import urljoin
 
 logger = logging.getLogger(__name__)
@@ -94,7 +95,7 @@ def resolve_mixdrop(url: str, session: requests.Session | None = None) -> dict:
     Resolve a MixDrop URL.
     Returns: {"filename": str, "size": int, "download_url": str, "headers": dict}
     """
-    sess = session or requests.Session()
+    sess = session or get_session()
     sess.headers.update({
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',

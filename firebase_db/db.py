@@ -228,4 +228,12 @@ def _init_firebase() -> firestore.Client:
     return firestore.client(database_id=os.getenv("FIRESTORE_DB_ID", "(default)"))
 
 
-db: firestore.Client = _init_firebase()
+db: firestore.Client | None = None
+
+
+def get_db() -> firestore.Client:
+    """Return the Firestore client, initializing on first use (lazy)."""
+    global db
+    if db is None:
+        db = _init_firebase()
+    return db

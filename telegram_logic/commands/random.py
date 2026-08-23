@@ -4,10 +4,7 @@ import logging
 from telethon import events
 from ..bot import bot
 from firebase_db.cache import get_cache_for_random
-
-from dotenv import load_dotenv
-load_dotenv()
-from ..helpers import env_int  # noqa: E402 — needs dotenv loaded first
+from ..helpers import env_int
 STORAGE_GROUP_ID = env_int("STORAGE_GROUP_ID")
 
 log = logging.getLogger(__name__)

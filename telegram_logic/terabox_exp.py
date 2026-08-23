@@ -16,9 +16,6 @@ from terabox.public_api import TeraBoxError, CancelledError
 from teraboxDL.public_api import download_terabox_file_experimental
 from teraboxDL.terabox_dl import get_video_info, TeraBoxDirectError
 
-from dotenv import load_dotenv
-load_dotenv()
-
 log = logging.getLogger(__name__)
 
 # — Heart Function —————————————————————————————————————————————————————————————

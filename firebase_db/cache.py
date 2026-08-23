@@ -30,7 +30,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import Literal
 
-from .db import db
+from .db import get_db
 
 log = logging.getLogger(__name__)
 
@@ -47,11 +47,15 @@ _RANDOM_SNAPSHOT: dict = {"data": {}, "timestamp": 0.0}
 _RANDOM_TTL_SECONDS = 15 * 60  # 15 minutes
 _RANDOM_SNAPSHOT_LOCK = threading.Lock()
 
+# Module-level executor for parallel Firestore reads — avoids creating/destroying
+# a ThreadPoolExecutor on every cache search.
+_FIRESTORE_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="firestore")
+
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _bucket_ref(bucket: str):
-    return db.collection(_CACHE_COLLECTION).document(bucket)
+    return get_db().collection(_CACHE_COLLECTION).document(bucket)
 
 
 # ── Public API ─────────────────────────────────────────────────────────────────
@@ -123,9 +127,9 @@ def search_in_cache(surl: str, user_mode: MODE) -> int:
         log.debug(f"Cache miss: surl={surl} (user_mode={user_mode})")
         return -1
 
-    # Parallel reads for multi-bucket search
-    with ThreadPoolExecutor(max_workers=len(search_order)) as pool:
-        results = list(pool.map(_read_bucket, search_order))
+    # Parallel reads for multi-bucket search — reuse module-level executor
+    futures = [_FIRESTORE_POOL.submit(_read_bucket, b) for b in search_order]
+    results = [f.result() for f in futures]
 
     for bucket, msg_id in results:
         if msg_id != -1:
@@ -164,8 +168,8 @@ def get_cache_for_random() -> dict:
                 log.error(f"[DB] get_cache_for_random failed for bucket={bucket}: {e}")
             return (bucket, {})
 
-        with ThreadPoolExecutor(max_workers=len(_BUCKETS)) as pool:
-            results = list(pool.map(_read_bucket, _BUCKETS))
+        futures = [_FIRESTORE_POOL.submit(_read_bucket, b) for b in _BUCKETS]
+        results = [f.result() for f in futures]
 
         merged: dict = {}
         for _, bucket_data in results:

@@ -1,23 +1,26 @@
-import os
-import asyncio
-import logging
-from concurrent.futures import ThreadPoolExecutor
-from contextlib import asynccontextmanager
+from dotenv import load_dotenv
+load_dotenv()  # must be first — other modules read env vars at import time
 
-from fastapi import FastAPI
-import uvicorn
-from telethon import events
-from telethon.tl.functions.bots import SetBotCommandsRequest
-from telethon.tl.types import BotCommand, BotCommandScopeDefault, BotCommandScopePeer
-from telegram_logic.bot import bot
-from telegram_logic.terabox_trad import process_terabox
-from telegram_logic.terabox_exp import process_terabox_experimental
-from telegram_logic.diskwala import process_diskwala
-from telegram_logic.helpers import extract_all_surls, extract_all_terabox_url_exp, env_int
-from diskwalaDL.public_api import extract_all_diskwala_urls
-from universalDL import extract_universal_urls
-from telegram_logic.universal import process_universal
-from firebase_db.users import track_user, get_user_mode
+import os  # noqa: E402
+import asyncio  # noqa: E402
+import logging  # noqa: E402
+from concurrent.futures import ThreadPoolExecutor  # noqa: E402
+from contextlib import asynccontextmanager  # noqa: E402
+
+from fastapi import FastAPI  # noqa: E402
+import uvicorn  # noqa: E402
+from telethon import events  # noqa: E402
+from telethon.tl.functions.bots import SetBotCommandsRequest  # noqa: E402
+from telethon.tl.types import BotCommand, BotCommandScopeDefault, BotCommandScopePeer  # noqa: E402
+from telegram_logic.bot import bot  # noqa: E402
+from telegram_logic.terabox_trad import process_terabox  # noqa: E402
+from telegram_logic.terabox_exp import process_terabox_experimental  # noqa: E402
+from telegram_logic.diskwala import process_diskwala  # noqa: E402
+from telegram_logic.helpers import extract_all_surls, extract_all_terabox_url_exp, env_int  # noqa: E402
+from diskwalaDL.public_api import extract_all_diskwala_urls  # noqa: E402
+from universalDL import extract_universal_urls  # noqa: E402
+from telegram_logic.universal import process_universal  # noqa: E402
+from firebase_db.users import track_user, get_user_mode  # noqa: E402
 
 # — Global User Tracker ——————————————————————————————————————————————————————————————————
 
@@ -46,9 +49,6 @@ async def global_tracker(event):
     # Does not raise StopPropagation, allowing other handlers to execute
 
 import telegram_logic.commands  # registers all @bot.on(...) handlers  # noqa: E402, F401
-
-from dotenv import load_dotenv  # noqa: E402
-load_dotenv()  # noqa: E402
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 APP_ID = env_int("APP_ID")

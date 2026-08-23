@@ -6,9 +6,6 @@ from telethon import TelegramClient
 
 from firebase_db.cache import search_in_cache
 
-from dotenv import load_dotenv
-load_dotenv()
-
 log = logging.getLogger(__name__)
 
 from .queue import MessageQueue  # noqa: E402 — log setup first
