@@ -92,7 +92,7 @@ source <(grep -v '^\s*#' "$ENV_FILE" | sed 's/^/export /')
 missing=()
 [ -z "${BOT_TOKEN:-}" ] && missing+=("BOT_TOKEN")
 [ -z "${APP_ID:-}" ] && missing+=("APP_ID")
-[ [ -z "${API_HASH:-}" ] && missing+=("API_HASH") || true ]
+[ -z "${API_HASH:-}" ] && missing+=("API_HASH")
 [ -z "${STORAGE_GROUP_ID:-}" ] && missing+=("STORAGE_GROUP_ID")
 [ -z "${FIREBASE_SECRETS:-}" ] && missing+=("FIREBASE_SECRETS")
 
