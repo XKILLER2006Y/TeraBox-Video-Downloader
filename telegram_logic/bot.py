@@ -42,7 +42,6 @@ bot = TelegramClient(
     flood_sleep_threshold=0,
     request_retries=2,
     timeout=30,
-    auto_ipv6=False,
 )
 
 # — Cache helpers ——————————————————————————————————————————————————————————————
