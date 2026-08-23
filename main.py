@@ -14,6 +14,8 @@ from telegram_logic.terabox_exp import process_terabox_experimental
 from telegram_logic.diskwala import process_diskwala
 from telegram_logic.helpers import extract_all_surls, extract_all_terabox_url_exp, env_int
 from diskwalaDL.public_api import extract_all_diskwala_urls
+from universalDL import extract_universal_urls
+from telegram_logic.universal import process_universal
 from firebase_db.users import track_user, get_user_mode
 
 # — Global User Tracker ——————————————————————————————————————————————————————————————————
@@ -92,51 +94,52 @@ async def handle_message(event):
 
     if mode == 'get':
         surls = extract_all_surls(text)
-        if not surls:
-            if extract_all_diskwala_urls(text):
-                await event.respond(DISKWALA_IN_TERABOX_MODE)
-            return  # silently ignore non-TeraBox messages
-        try:
-            log.info("Message redirected to [get] mode")
-            await asyncio.gather(*[process_terabox(event, surl) for surl in surls])
-        except Exception as e:
-            log.error(f"Unhandled error in handle_message: {e}")
+        if surls:
+            try:
+                log.info("Message redirected to [get] mode")
+                await asyncio.gather(*[process_terabox(event, surl) for surl in surls])
+            except Exception as e:
+                log.error(f"Unhandled error in handle_message: {e}")
+            return
 
     elif mode == 'exp':
         terabox_url_list = extract_all_terabox_url_exp(text)
-        if not terabox_url_list:
-            if extract_all_diskwala_urls(text):
-                await event.respond(DISKWALA_IN_TERABOX_MODE)
-            return  # silently ignore non-TeraBox messages
-        try:
-            log.info("Message redirected to [exp] mode")
-            await asyncio.gather(*[process_terabox_experimental(event, surl) for surl in terabox_url_list])
-        except Exception as e:
-            log.error(f"Unhandled error in handle_message: {e}")
+        if terabox_url_list:
+            try:
+                log.info("Message redirected to [exp] mode")
+                await asyncio.gather(*[process_terabox_experimental(event, surl) for surl in terabox_url_list])
+            except Exception as e:
+                log.error(f"Unhandled error in handle_message: {e}")
+            return
 
     elif mode == 'exphd':
         terabox_url_list = extract_all_terabox_url_exp(text)
-        if not terabox_url_list:
-            if extract_all_diskwala_urls(text):
-                await event.respond(DISKWALA_IN_TERABOX_MODE)
-            return  # silently ignore non-TeraBox messages
-        try:
-            log.info("Message redirected to [exphd] mode")
-            await asyncio.gather(*[process_terabox_experimental(event, surl, is_hd=True) for surl in terabox_url_list])
-        except Exception as e:
-            log.error(f"Unhandled error in handle_message: {e}")
+        if terabox_url_list:
+            try:
+                log.info("Message redirected to [exphd] mode")
+                await asyncio.gather(*[process_terabox_experimental(event, surl, is_hd=True) for surl in terabox_url_list])
+            except Exception as e:
+                log.error(f"Unhandled error in handle_message: {e}")
+            return
 
     elif mode == 'dw':
         diskwala_url_list = extract_all_diskwala_urls(text)
-        if not diskwala_url_list:
-            if extract_all_terabox_url_exp(text):
-                await event.respond(TERABOX_IN_DISKWALA_MODE)
-            return  # silently ignore non-Diskwala messages
+        if diskwala_url_list:
+            try:
+                log.info("Message redirected to [dw] mode")
+                await asyncio.gather(*[process_diskwala(event, url) for url in diskwala_url_list])
+            except Exception as e:
+                log.error(f"Unhandled error in handle_message: {e}")
+            return
+
+    # ── Universal DL fallback — try all platforms if no mode-specific match ─
+    universal_url_list = extract_universal_urls(text)
+    if universal_url_list:
         try:
-            log.info("Message redirected to [dw] mode")
-            await asyncio.gather(*[process_diskwala(event, url) for url in diskwala_url_list])
+            log.info(f"Universal DL: processing {len(universal_url_list)} link(s)")
+            await asyncio.gather(*[process_universal(event, url, bot) for url in universal_url_list])
         except Exception as e:
-            log.error(f"Unhandled error in handle_message: {e}")
+            log.error(f"Unhandled error in universal DL: {e}")
 
     return
 # — Telegram bot runner ——————————————————————————————————————————————————————————————————————
@@ -171,6 +174,7 @@ async def run_bot() -> None:
         BotCommand(command="exphd", description="[Experimental] Download HD TeraBox video"), 
         BotCommand(command="get", description="Download TeraBox video [Unstable]"),
         BotCommand(command="dw", description="Download Diskwala video"),
+        BotCommand(command="dl", description="Download from any supported host (GoFile, StreamTape, Dood, MediaFire, etc.)"),
         BotCommand(command="random", description="Get a random video"),
         BotCommand(command="settings", description="View Details"),
         BotCommand(command="op", description="Send feedback to admin"),
