@@ -6,6 +6,7 @@ their own requests.Session. This eliminates repeated TLS handshakes and
 TCP connection setup — the single biggest performance win across the bot.
 """
 import socket
+import time
 import threading
 import requests
 from requests.adapters import HTTPAdapter
@@ -35,7 +36,7 @@ _dns_TTL = 600  # seconds
 
 def _cached_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
     """DNS resolver with in-memory TTL cache."""
-    now = socket.time.time()
+    now = time.time()
     with _dns_cache_lock:
         entry = _dns_cache.get(host)
         if entry and entry[1] > now:
