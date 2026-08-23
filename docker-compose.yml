@@ -1,6 +1,10 @@
 services:
   telegram-bot:
-    build: .
+    build:
+      context: .
+      platforms:
+        - linux/amd64
+        - linux/arm64
     image: telegram-bot:latest
     container_name: telegram-bot
     env_file:
@@ -12,12 +16,17 @@ services:
     volumes:
       - storage_data:/app/storage
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "2.0"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,os;urllib.request.urlopen(f'http://localhost:{os.environ.get(\"PORT\",\"3000\")}/ping')"]
-      interval: 30s
-      timeout: 10s
+      interval: 60s
+      timeout: 5s
       retries: 3
-      start_period: 15s
+      start_period: 30s
 
 volumes:
   storage_data:

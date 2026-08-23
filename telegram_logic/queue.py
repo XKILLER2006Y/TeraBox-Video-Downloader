@@ -39,7 +39,7 @@ class MessageQueue:
                 qsize = self._queue.qsize()
                 if qsize > 0:
                     log.info(f"[Queue Monitor] Items in queue: {qsize}")
-            await asyncio.sleep(3)
+            await asyncio.sleep(10)
 
     async def put(self, process_callable, event, url: str, *args):
         await self._ensure_queue_worker()

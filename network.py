@@ -64,8 +64,8 @@ def get_session() -> requests.Session:
     """
     Return the global requests.Session singleton.
 
-    Thread-safe. First call creates the session with generous connection
-    pooling (50 connections, 50 max per host). Subsequent calls return
+    Thread-safe. First call creates the session with connection
+    pooling (10 connections, 10 max per host). Subsequent calls return
     the same instance — connection reuse means zero TLS overhead on
     repeated requests to the same host.
     """
@@ -78,9 +78,9 @@ def get_session() -> requests.Session:
         s = requests.Session()
         s.headers.update(_browser_headers)
         adapter = HTTPAdapter(
-            pool_connections=50,
-            pool_maxsize=50,
-            max_retries=Retry(total=0),  # we handle retries ourselves
+            pool_connections=10,
+            pool_maxsize=10,
+            max_retries=Retry(total=0),
         )
         s.mount("https://", adapter)
         s.mount("http://", adapter)
@@ -97,7 +97,6 @@ def prewarm_connections():
     hosts = [
         "dm.1024tera.com",
         "www.1024tera.com",
-        "terabox.com",
     ]
     import logging
     log = logging.getLogger(__name__)
@@ -105,7 +104,7 @@ def prewarm_connections():
     for host in hosts:
         try:
             # DNS resolution + TCP connect + TLS handshake
-            session.head(f"https://{host}/", timeout=5)
+            session.head(f"https://{host}/", timeout=3)
             log.info(f"Prewarmed connection to {host}")
         except Exception:
             log.debug(f"Prewarm {host} failed (non-critical)")

@@ -49,7 +49,7 @@ _RANDOM_SNAPSHOT_LOCK = threading.Lock()
 
 # Module-level executor for parallel Firestore reads — avoids creating/destroying
 # a ThreadPoolExecutor on every cache search.
-_FIRESTORE_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="firestore")
+_FIRESTORE_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="firestore")
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────

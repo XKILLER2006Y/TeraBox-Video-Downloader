@@ -4,6 +4,8 @@ load_dotenv()  # must be first — other modules read env vars at import time
 import os  # noqa: E402
 import asyncio  # noqa: E402
 import logging  # noqa: E402
+import glob  # noqa: E402
+import time  # noqa: E402
 from concurrent.futures import ThreadPoolExecutor  # noqa: E402
 from contextlib import asynccontextmanager  # noqa: E402
 
@@ -153,9 +155,10 @@ async def run_bot() -> None:
     if not STORAGE_GROUP_ID:
         log.warning("STORAGE_GROUP_ID not set — caching disabled, videos will be sent directly.")
 
-    # ── Threadpool: size 100 to handle concurrent downloads × 5 threads each ──
+    # ── Threadpool: configurable via THREADPOOL_SIZE env (default 8 for low-RAM VPS) ──
     loop = asyncio.get_running_loop()
-    loop.set_default_executor(ThreadPoolExecutor(max_workers=100, thread_name_prefix="bot"))
+    tp_size = env_int("THREADPOOL_SIZE", 8)
+    loop.set_default_executor(ThreadPoolExecutor(max_workers=tp_size, thread_name_prefix="bot"))
 
     # ── Pre-warm HTTP connections to eliminate first-request latency ───────
     from network import prewarm_connections
@@ -220,10 +223,37 @@ async def run_bot() -> None:
 
 # — FastAPI app ———————————————————————————————————————————————————————————————————————————————
 
+# — Storage cleanup for Railway (ephemeral storage) ——————————————————————————————————————
+
+async def _storage_cleanup_loop():
+    """Periodically clean old files from storage to prevent disk exhaustion."""
+    storage_dir = os.path.join(os.path.dirname(__file__), "storage")
+    if not os.path.exists(storage_dir):
+        os.makedirs(storage_dir, exist_ok=True)
+    
+    while True:
+        try:
+            await asyncio.sleep(300)  # Every 5 minutes
+            now = time.time()
+            cleaned = 0
+            for f in glob.glob(os.path.join(storage_dir, "*")):
+                if os.path.isfile(f):
+                    age = now - os.path.getmtime(f)
+                    if age > 1800:  # 30 minutes
+                        os.remove(f)
+                        cleaned += 1
+            if cleaned > 0:
+                log.info(f"[Storage Cleanup] Removed {cleaned} old files")
+        except Exception as e:
+            log.error(f"[Storage Cleanup] Error: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     bot_task = asyncio.create_task(run_bot())
+    cleanup_task = asyncio.create_task(_storage_cleanup_loop())
     yield
+    cleanup_task.cancel()
     bot_task.cancel()
     try:
         await bot_task

@@ -16,7 +16,7 @@ from .helpers import env_int  # noqa: E402
 # 1. Unbounded concurrency (e.g. 50 links) will instantly trigger FloodWait before any work gets done.
 # 2. Downloading/Uploading 50 videos concurrently will crash a low-spec VPS (OOM or CPU exhaustion).
 # 10 is a good high-capacity limit that balances speed with server stability.
-terabox_queue = MessageQueue(concurrency_limit=20)
+terabox_queue = MessageQueue(concurrency_limit=5)
 
 async def _safe_send(*args, **kwargs):
     return await terabox_queue.safe_send(*args, **kwargs)
