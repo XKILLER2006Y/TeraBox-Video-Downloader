@@ -5,12 +5,16 @@ Every resolver and downloader should use get_session() instead of creating
 their own requests.Session. This eliminates repeated TLS handshakes and
 TCP connection setup — the single biggest performance win across the bot.
 """
+import os
 import socket
 import time
 import threading
+import logging
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+
+log = logging.getLogger(__name__)
 
 _browser_headers = {
     "User-Agent": (
@@ -65,9 +69,7 @@ def get_session() -> requests.Session:
     Return the global requests.Session singleton.
 
     Thread-safe. First call creates the session with connection
-    pooling (10 connections, 10 max per host). Subsequent calls return
-    the same instance — connection reuse means zero TLS overhead on
-    repeated requests to the same host.
+    pooling. Pool sizes configurable via CONN_POOL_SIZE env var.
     """
     global _session
     if _session is not None:
@@ -75,16 +77,18 @@ def get_session() -> requests.Session:
     with _lock:
         if _session is not None:
             return _session
+        pool_size = int(os.environ.get("CONN_POOL_SIZE", "5"))
         s = requests.Session()
         s.headers.update(_browser_headers)
         adapter = HTTPAdapter(
-            pool_connections=10,
-            pool_maxsize=10,
+            pool_connections=pool_size,
+            pool_maxsize=pool_size,
             max_retries=Retry(total=0),
         )
         s.mount("https://", adapter)
         s.mount("http://", adapter)
         _session = s
+        log.info(f"HTTP session created (pool_size={pool_size})")
         return _session
 
 
@@ -98,8 +102,6 @@ def prewarm_connections():
         "dm.1024tera.com",
         "www.1024tera.com",
     ]
-    import logging
-    log = logging.getLogger(__name__)
     session = get_session()
     for host in hosts:
         try:

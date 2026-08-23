@@ -4,8 +4,10 @@ load_dotenv()  # must be first — other modules read env vars at import time
 import os  # noqa: E402
 import asyncio  # noqa: E402
 import logging  # noqa: E402
+import logging.handlers  # noqa: E402
 import glob  # noqa: E402
 import time  # noqa: E402
+import resource  # noqa: E402
 from concurrent.futures import ThreadPoolExecutor  # noqa: E402
 from contextlib import asynccontextmanager  # noqa: E402
 
@@ -61,6 +63,13 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s", level=logging.INFO,
 )
 log = logging.getLogger(__name__)
+
+# ── Log rotation: prevent bot.log from eating disk on Cloud Shell ──
+_log_handler = logging.handlers.RotatingFileHandler(
+    "bot.log", maxBytes=5 * 1024 * 1024, backupCount=2, encoding="utf-8"
+)
+_log_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+logging.getLogger().addHandler(_log_handler)
 
 # — Wrong-source hints ————————————————————————————————————————————————————————————————————————
 DISKWALA_IN_TERABOX_MODE = (
@@ -233,13 +242,13 @@ async def _storage_cleanup_loop():
     
     while True:
         try:
-            await asyncio.sleep(300)  # Every 5 minutes
+            await asyncio.sleep(120)  # Every 2 minutes (Cloud Shell: 5GB disk)
             now = time.time()
             cleaned = 0
             for f in glob.glob(os.path.join(storage_dir, "*")):
                 if os.path.isfile(f):
                     age = now - os.path.getmtime(f)
-                    if age > 1800:  # 30 minutes
+                    if age > 600:  # 10 minutes
                         os.remove(f)
                         cleaned += 1
             if cleaned > 0:
@@ -248,11 +257,24 @@ async def _storage_cleanup_loop():
             log.error(f"[Storage Cleanup] Error: {e}")
 
 
+async def _memory_monitor_loop():
+    """Log memory usage every 5 minutes for Cloud Shell visibility."""
+    while True:
+        try:
+            await asyncio.sleep(300)
+            kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+            log.info(f"[Memory] Peak RSS: {kb // 1024}MB")
+        except Exception:
+            pass
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     bot_task = asyncio.create_task(run_bot())
     cleanup_task = asyncio.create_task(_storage_cleanup_loop())
+    mem_task = asyncio.create_task(_memory_monitor_loop())
     yield
+    mem_task.cancel()
     cleanup_task.cancel()
     bot_task.cancel()
     try:
