@@ -5,6 +5,7 @@ import time
 import subprocess
 import threading
 import random
+from concurrent.futures import ThreadPoolExecutor
 from .internal_helpers import BASE_URL, _headers, _logid, TeraBoxError, CancelledError, BYTES_PER_MB, CookiesList
 from urllib.parse import unquote, urlparse, urlunparse, urlencode, parse_qs
 
@@ -106,12 +107,12 @@ def discover_all_hls_chunks(session: requests.Session, shareid, uk, sign, timest
             fail_streak = 0
         except requests.RequestException:
             fail_streak += 1
-            backoff = (2 ** fail_streak) + random.uniform(0.5, 1.5)
+            backoff = min(0.5 * fail_streak, 2.0)
             time.sleep(backoff)
             return []
 
         if not text.startswith("#EXTM3U"):
-            time.sleep(random.uniform(0.5, 1.5))
+            time.sleep(0.2)
             return []
 
         segs = [l.strip() for l in text.split("\n") if l.strip() and not l.startswith("#")]
@@ -134,7 +135,7 @@ def discover_all_hls_chunks(session: requests.Session, shareid, uk, sign, timest
             full_url = urlunparse(parsed._replace(query=urlencode({k: v[0] for k, v in p.items()})))
             results.append((chunk_idx, full_url, ts_size))
 
-        time.sleep(random.uniform(0.3, 0.8))
+        time.sleep(0.15)
         return results
 
     def is_complete():
@@ -198,7 +199,7 @@ def discover_all_hls_chunks(session: requests.Session, shareid, uk, sign, timest
 
 
 def _download_segment(session: requests.Session, url: str, path: str, expected_size: int, surl: str = "", cancel_event: threading.Event | None = None) -> None:
-    for attempt in range(5):
+    for attempt in range(3):
         if cancel_event and cancel_event.is_set():
             raise CancelledError("Download cancelled")
         try:
@@ -218,9 +219,9 @@ def _download_segment(session: requests.Session, url: str, path: str, expected_s
         except CancelledError:
             raise
         except Exception as e:
-            if attempt == 4:
-                raise TeraBoxError(f"Chunk failed after 5 attempts: {e}")
-            backoff = (2 ** attempt) + random.uniform(1.0, 3.0)
+            if attempt == 2:
+                raise TeraBoxError(f"Chunk failed after 3 attempts: {e}")
+            backoff = min(1.5 * (attempt + 1), 4.0)
             print(f" [Retry {attempt + 1} - sleep {backoff:.1f}s]", end="", flush=True)
             time.sleep(backoff)
 
@@ -228,25 +229,35 @@ def _download_segment(session: requests.Session, url: str, path: str, expected_s
 def download_all_chunks(session: requests.Session, chunks: list, tmp_dir: str, surl: str = "", cancel_event: threading.Event | None = None, progress_callback=None) -> None:
     os.makedirs(tmp_dir, exist_ok=True)
     total = len(chunks)
-    print(f"    Downloading {total} chunk(s)...")
-    
-    total_size = sum(ts for _, _, ts in chunks)
-    done_size = 0
+    print(f"    Downloading {total} chunk(s) (parallel)...")
 
-    for i, (idx, url, ts_size) in enumerate(chunks, 1):
+    total_size = sum(ts for _, _, ts in chunks)
+    shared_done = [0]  # mutable counter shared across threads
+    progress_lock = threading.Lock()
+    _start = time.time()
+
+    def _dl_one(args):
+        idx, url, ts_size, i = args
         if cancel_event and cancel_event.is_set():
             raise CancelledError("Download cancelled")
         seg_path = os.path.join(tmp_dir, f"chunk_{idx:03d}.ts")
-        
         print(f"      [{i}/{total}] Chunk {idx} ({ts_size / BYTES_PER_MB:.1f} MB)...", end="", flush=True)
         _download_segment(session, url, seg_path, ts_size, surl, cancel_event)
-        
         if os.path.exists(seg_path):
-            done_size += os.path.getsize(seg_path)
-            
+            with progress_lock:
+                shared_done[0] += os.path.getsize(seg_path)
+                done = shared_done[0]
         print()
         if progress_callback:
-            progress_callback(done_size, total_size)
+            progress_callback(done, total_size)
+
+    work = [(idx, url, ts_size, i) for i, (idx, url, ts_size) in enumerate(chunks, 1)]
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        list(pool.map(_dl_one, work))
+
+    elapsed = time.time() - _start
+    speed = (total_size / (1024 * 1024)) / elapsed if elapsed > 0 else 0
+    print(f"    ✓ Downloaded {total_size / (1024 * 1024):.1f} MB in {elapsed:.1f}s ({speed:.1f} MB/s)")
 
 
 def concatenate_chunks_ffmpeg(tmp_dir: str, chunks: list, mp4_path: str, cancel_event: threading.Event | None = None) -> None:

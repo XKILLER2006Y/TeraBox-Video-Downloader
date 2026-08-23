@@ -210,11 +210,12 @@ def _start_download(diskwala_url: str, headers: dict) -> dict:
 
 
 def _poll_status(diskwala_url: str, headers: dict, timeout: int = 120) -> dict:
-    """Poll the status endpoint until status='done' or timeout."""
+    """Poll the status endpoint until status='done' or timeout. Adaptive interval."""
     from urllib.parse import quote
 
     status_url = DISKWALA_STATUS_API + quote(diskwala_url, safe="")
     deadline = time.monotonic() + timeout
+    poll_interval = 0.5  # start fast
 
     while time.monotonic() < deadline:
         resp = requests.get(status_url, headers=headers, timeout=60)
@@ -232,8 +233,9 @@ def _poll_status(diskwala_url: str, headers: dict, timeout: int = 120) -> dict:
             raise DiskwalaDirectError(
                 data.get("error", "Diskwala processing failed")
             )
-        # pending — wait and retry
-        time.sleep(2)
+        # pending — adaptive backoff: 0.5s → 1s → 2s (capped)
+        time.sleep(poll_interval)
+        poll_interval = min(poll_interval * 1.5, 2.0)
 
     raise DiskwalaDirectError(
         f"Timed out after {timeout}s waiting for Diskwala status"
@@ -261,6 +263,7 @@ def _pick_file_field(file_obj: dict, *keys, required=True, default=None):
 
 _auth_loop: asyncio.AbstractEventLoop | None = None
 _auth_loop_lock = threading.Lock()
+_auth_loop_ready = threading.Event()
 
 # Mini App initData tokens stay valid for hours — cache to avoid a Telegram
 # roundtrip (RequestAppWebViewRequest) on every single resolution request.
@@ -275,19 +278,19 @@ def _get_auth_loop() -> asyncio.AbstractEventLoop:
         return _auth_loop
     with _auth_loop_lock:
         if _auth_loop is None or not _auth_loop.is_running():
+            _auth_loop_ready.clear()
 
             def _run_forever():
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 global _auth_loop
                 _auth_loop = loop
+                _auth_loop_ready.set()
                 loop.run_forever()
 
             t = threading.Thread(target=_run_forever, daemon=True, name="diskwala-auth")
             t.start()
-            # Wait for the loop to be published
-            while _auth_loop is None:
-                time.sleep(0.01)
+            _auth_loop_ready.wait(timeout=5)
     return _auth_loop
 
 

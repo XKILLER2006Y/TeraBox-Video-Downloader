@@ -1,6 +1,7 @@
 import os
 import asyncio
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -151,6 +152,14 @@ async def run_bot() -> None:
 
     if not STORAGE_GROUP_ID:
         log.warning("STORAGE_GROUP_ID not set — caching disabled, videos will be sent directly.")
+
+    # ── Threadpool: size 100 to handle concurrent downloads × 5 threads each ──
+    loop = asyncio.get_running_loop()
+    loop.set_default_executor(ThreadPoolExecutor(max_workers=100, thread_name_prefix="bot"))
+
+    # ── Pre-warm HTTP connections to eliminate first-request latency ───────
+    from network import prewarm_connections
+    await asyncio.to_thread(prewarm_connections)
 
     await bot.start(bot_token=BOT_TOKEN)
 

@@ -75,37 +75,34 @@ def _extract_surl(terabox_url: str) -> str:
 
 
 def _load_session(cookies_str: str = ""):
-    """Return the global session, optionally loading cookies into it."""
-    session = get_session()
-    if cookies_str:
-        for c in cookies_str.split(";"):
-            if "=" in c:
-                k, v = c.strip().split("=", 1)
-                session.cookies.set(k.strip(), v.strip(), domain="1024tera.com", path="/")
-    return session
+    """Return the global session. Cookies are passed via headers, not mutated."""
+    return get_session()
 
 
-def _headers(session: requests.Session, surl: str = "") -> dict:
+def _headers(session: requests.Session, surl: str = "", cookies_str: str = "") -> dict:
     hdrs = {
         "User-Agent": random.choice(USER_AGENTS),
         "Referer": f"{BASE_URL}/wap/share/filelist?surl={surl}" if surl else f"{BASE_URL}/wap/share/filelist",
     }
-    cookie_str = "; ".join(
-        f"{c.name}={c.value}" for c in session.cookies
-        if "1024tera" in (c.domain or "")
-    )
-    if cookie_str:
-        hdrs["Cookie"] = cookie_str
+    if cookies_str:
+        hdrs["Cookie"] = cookies_str
+    else:
+        cookie_str = "; ".join(
+            f"{c.name}={c.value}" for c in session.cookies
+            if "1024tera" in (c.domain or "")
+        )
+        if cookie_str:
+            hdrs["Cookie"] = cookie_str
     return hdrs
 
 
-def _get_js_token(session: requests.Session, surl: str) -> str:
+def _get_js_token(session: requests.Session, surl: str, cookies_str: str = "") -> str:
     """Extract jsToken from the TeraBox share page HTML."""
     url = f"{BASE_URL}/wap/share/filelist?surl={surl}&clearCache=1"
     last_err = "Unknown error"
     for attempt in range(3):
         try:
-            html = session.get(url, headers=_headers(session, surl), timeout=60).text
+            html = session.get(url, headers=_headers(session, surl, cookies_str), timeout=60).text
             m = re.search(r'fn%28%22([A-Fa-f0-9]+)%22%29', html)
             if m:
                 return m.group(1)
@@ -126,14 +123,14 @@ def _get_js_token(session: requests.Session, surl: str) -> str:
     raise TeraBoxDirectError(f"Could not extract jsToken: {last_err}")
 
 
-def _get_share_info(session: requests.Session, js_token: str, surl: str) -> dict:
+def _get_share_info(session: requests.Session, js_token: str, surl: str, cookies_str: str = "") -> dict:
     """Fetch file metadata from TeraBox API."""
     params = {
         "app_id": "250528", "shorturl": f"1{surl}", "root": "1",
         "web": "1", "channel": "dubox", "clienttype": "0",
         "jsToken": js_token, "t": str(int(time.time())), "dp-logid": _logid(),
     }
-    hdrs = _headers(session, surl)
+    hdrs = _headers(session, surl, cookies_str)
     hdrs.update({"Accept": "application/json, text/plain, */*", "Origin": BASE_URL})
 
     try:
@@ -181,7 +178,7 @@ def _build_streaming_url(shareid, uk, sign, timestamp, fs_id, quality: str) -> s
     })
 
 
-def _discover_all_hls_chunks(session, shareid, uk, sign, timestamp, fs_id, surl) -> str:
+def _discover_all_hls_chunks(session, shareid, uk, sign, timestamp, fs_id, surl, cookies_str="") -> str:
     """
     Poll the TeraBox streaming endpoint to collect all HLS chunks,
     then build an M3U8 playlist and return it as a string (not a file).
@@ -199,14 +196,14 @@ def _discover_all_hls_chunks(session, shareid, uk, sign, timestamp, fs_id, surl)
         req_count += 1
         url = _build_streaming_url(shareid, uk, sign, timestamp, fs_id, quality)
         try:
-            text = session.get(url, headers=_headers(session, surl), timeout=60).text.strip()
+            text = session.get(url, headers=_headers(session, surl, cookies_str), timeout=60).text.strip()
         except Exception as e:
             log.warning(f"HLS chunk discovery: error on request {req_count}: {e}")
-            time.sleep(2)
+            time.sleep(0.3)
             continue
 
         if not text.startswith("#EXTM3U"):
-            time.sleep(0.5)
+            time.sleep(0.15)
             continue
 
         segs = [l.strip() for l in text.split("\n") if l.strip() and not l.startswith("#")]
@@ -271,16 +268,15 @@ def _get_video_metadata(terabox_url: str) -> dict:
     surl = _extract_surl(terabox_url)
     log.info(f"Resolving TeraBox metadata for surl={surl}")
 
-    # Create session (with cookies if available, without for basic share page)
+    session = _load_session()
     cookies_str = os.getenv("COOKIES1", "")
-    session = _load_session(cookies_str)
 
     # Step 1: Get jsToken from share page
-    js_token = _get_js_token(session, surl)
+    js_token = _get_js_token(session, surl, cookies_str)
     log.info(f"Got jsToken: {js_token[:16]}...")
 
     # Step 2: Get share info (file metadata)
-    info = _get_share_info(session, js_token, surl)
+    info = _get_share_info(session, js_token, surl, cookies_str)
     files = info.get("list", [])
     if not files:
         raise TeraBoxDirectError("No files found in this share. The link may be expired or the files were deleted.")
@@ -308,7 +304,7 @@ def _get_video_metadata(terabox_url: str) -> dict:
         )
 
     # Step 3: Build streaming URL and discover all HLS chunks
-    m3u8_text = _discover_all_hls_chunks(session, shareid, uk, sign, timestamp, fs_id, surl)
+    m3u8_text = _discover_all_hls_chunks(session, shareid, uk, sign, timestamp, fs_id, surl, cookies_str)
 
     # Return metadata with M3U8 text (no file path — avoids disk I/O)
     return {

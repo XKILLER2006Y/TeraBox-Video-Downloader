@@ -1,11 +1,12 @@
 import threading
 import os
 import hashlib
-import requests
 import shutil
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from .internal_helpers import _safe_filename, BYTES_PER_MB, _headers
-from .core_pipeline import load_session, get_js_token, get_share_info, discover_all_hls_chunks, download_all_chunks, concatenate_chunks_ffmpeg, build_streaming_url
+from .core_pipeline import get_js_token, get_share_info, discover_all_hls_chunks, download_all_chunks, concatenate_chunks_ffmpeg, build_streaming_url
 from .internal_helpers import TeraBoxError, CancelledError
+from network import get_session
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -23,17 +24,15 @@ def prepare_terabox_link(surl: str) -> dict:
 
     Raises TeraBoxError on any failure.
     """
-    temp_session = requests.Session()
+    session = get_session()
 
     print("[1] Extracting jsToken...")
-    try:
-        js_token = get_js_token(temp_session, surl)
-        print(f"    jsToken: {js_token[:30]}...")
+    js_token = get_js_token(session, surl)
+    print(f"    jsToken: {js_token[:30]}...")
 
-        print("[2] Fetching share info...")
-        info = get_share_info(temp_session, js_token, surl)
-    finally:
-        temp_session.close()
+    print("[2] Fetching share info...")
+    info = get_share_info(session, js_token, surl)
+
     files = info.get("list", [])
     if not files:
         print("    No files in share.")
@@ -50,7 +49,7 @@ def prepare_terabox_link(surl: str) -> dict:
         "uk": info["uk"],
         "sign": info["sign"],
         "timestamp": info["timestamp"],
-        "session": load_session(),
+        "session": session,
         "surl": surl,
     }
 
@@ -90,28 +89,42 @@ def download_terabox_file(
     try:
         working_quality = None
         qualities_to_try = [
-            "M3U8_AUTO_1080", "M3U8_AUTO_720", 
-            "M3U8_AUTO_480", "M3U8_AUTO_360", 
+            "M3U8_AUTO_1080", "M3U8_AUTO_720",
+            "M3U8_AUTO_480", "M3U8_AUTO_360",
             "M3U8_720P", "M3U8_480P", "M3U8_360P"
         ]
-        
-        for q in qualities_to_try:
-            print(f"    Checking quality: {q}...", end="", flush=True)
+
+        def _probe_quality(q):
             url = build_streaming_url(
-                prepared["shareid"], prepared["uk"], prepared["sign"], 
+                prepared["shareid"], prepared["uk"], prepared["sign"],
                 prepared["timestamp"], prepared["fs_id"], q
             )
             try:
-                r = session.get(url, headers=_headers(session, surl), timeout=30)
+                r = session.get(url, headers=_headers(session, surl), timeout=10)
                 if r.text.strip().startswith("#EXTM3U"):
-                    working_quality = q
-                    print(" ✓ Works!")
+                    return q
+            except Exception:
+                pass
+            return None
+
+        # Probe top 3 in parallel (fast timeout), then fall back to rest
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            futures = {pool.submit(_probe_quality, q): q for q in qualities_to_try[:3]}
+            for future in as_completed(futures):
+                result = future.result()
+                if result:
+                    working_quality = result
                     break
-                else:
-                    print(" ✗ Failed")
-            except Exception as e:
-                print(f" ✗ Error: {e}")
-                
+            if not working_quality:
+                # Cancel remaining and probe rest
+                for f in futures:
+                    f.cancel()
+                for q in qualities_to_try[3:]:
+                    result = _probe_quality(q)
+                    if result:
+                        working_quality = result
+                        break
+
         if not working_quality:
             raise TeraBoxError("Could not find any available streaming quality for this video.")
 

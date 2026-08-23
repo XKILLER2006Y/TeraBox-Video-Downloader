@@ -26,6 +26,7 @@ Search priority (same as old Gist implementation):
 import base64
 import logging
 import time
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import Literal
 
@@ -44,6 +45,7 @@ _BUCKETS = ("get", "exp", "exphd", "dw")
 # { "data": {surl: msg_id, ...}, "timestamp": float }
 _RANDOM_SNAPSHOT: dict = {"data": {}, "timestamp": 0.0}
 _RANDOM_TTL_SECONDS = 15 * 60  # 15 minutes
+_RANDOM_SNAPSHOT_LOCK = threading.Lock()
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -143,38 +145,35 @@ def get_cache_for_random() -> dict:
 
     Returns an empty dict on DB error.
     """
-    global _RANDOM_SNAPSHOT
+    with _RANDOM_SNAPSHOT_LOCK:
+        age = time.time() - _RANDOM_SNAPSHOT["timestamp"]
+        if age < _RANDOM_TTL_SECONDS and _RANDOM_SNAPSHOT["data"]:
+            log.debug(f"Serving /random from in-memory snapshot (age={age:.0f}s)")
+            return _RANDOM_SNAPSHOT["data"]
 
-    age = time.time() - _RANDOM_SNAPSHOT["timestamp"]
-    if age < _RANDOM_TTL_SECONDS and _RANDOM_SNAPSHOT["data"]:
-        log.debug(f"Serving /random from in-memory snapshot (age={age:.0f}s)")
-        return _RANDOM_SNAPSHOT["data"]
+        log.info("Refreshing /random snapshot from Firestore")
 
-    log.info("Refreshing /random snapshot from Firestore")
+        def _read_bucket(bucket: str) -> tuple[str, dict]:
+            try:
+                snap = _bucket_ref(bucket).get()
+                if snap.exists:
+                    data = snap.to_dict() or {}
+                    decoded = {_decode_key(k): v for k, v in data.items()}
+                    return (bucket, decoded)
+            except Exception as e:
+                log.error(f"[DB] get_cache_for_random failed for bucket={bucket}: {e}")
+            return (bucket, {})
 
-    def _read_bucket(bucket: str) -> tuple[str, dict]:
-        """Read a single bucket and return (bucket_name, data_dict)."""
-        try:
-            snap = _bucket_ref(bucket).get()
-            if snap.exists:
-                data = snap.to_dict() or {}
-                decoded = {_decode_key(k): v for k, v in data.items()}
-                return (bucket, decoded)
-        except Exception as e:
-            log.error(f"[DB] get_cache_for_random failed for bucket={bucket}: {e}")
-        return (bucket, {})
+        with ThreadPoolExecutor(max_workers=len(_BUCKETS)) as pool:
+            results = list(pool.map(_read_bucket, _BUCKETS))
 
-    # Parallel reads for all buckets
-    with ThreadPoolExecutor(max_workers=len(_BUCKETS)) as pool:
-        results = list(pool.map(_read_bucket, _BUCKETS))
+        merged: dict = {}
+        for _, bucket_data in results:
+            merged.update(bucket_data)
 
-    merged: dict = {}
-    for _, bucket_data in results:
-        merged.update(bucket_data)
-
-    _RANDOM_SNAPSHOT["data"]      = merged
-    _RANDOM_SNAPSHOT["timestamp"] = time.time()
-    return merged
+        _RANDOM_SNAPSHOT["data"]      = merged
+        _RANDOM_SNAPSHOT["timestamp"] = time.time()
+        return merged
 
 
 # ── Key encoding ───────────────────────────────────────────────────────────────
