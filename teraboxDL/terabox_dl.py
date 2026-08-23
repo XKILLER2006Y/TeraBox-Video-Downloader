@@ -6,7 +6,7 @@ import logging
 import requests
 from urllib.parse import unquote, urlparse, urlunparse, urlencode, parse_qs
 
-from network import get_session
+from network import get_session, USER_AGENTS
 
 log = logging.getLogger(__name__)
 
@@ -48,13 +48,6 @@ def _classify_errno(errno: int) -> str:
 # ── Config ────────────────────────────────────────────────────────────────────
 BASE_DOMAIN = "dm.1024tera.com"
 BASE_URL = f"https://{BASE_DOMAIN}"
-
-USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:131.0) Gecko/20100101 Firefox/131.0",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-]
 
 
 def _logid() -> str:

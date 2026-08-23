@@ -1,6 +1,7 @@
 from dotenv import load_dotenv
 load_dotenv()  # must be first — other modules read env vars at import time
 
+import gc  # noqa: E402
 import os  # noqa: E402
 import asyncio  # noqa: E402
 import logging  # noqa: E402
@@ -10,6 +11,16 @@ import time  # noqa: E402
 import resource  # noqa: E402
 from concurrent.futures import ThreadPoolExecutor  # noqa: E402
 from contextlib import asynccontextmanager  # noqa: E402
+
+# ── CPython memory tuning (Cloud Shell: 2GB RAM) ────────────────────────────────
+# Reduce GC frequency: gen0 threshold 700→1500, gen1→15, gen2→10
+# Fewer GC pauses = better throughput during bursty download/upload cycles.
+gc.set_threshold(1500, 15, 10)
+
+# Tell glibc to return freed pages to the OS aggressively (Linux only).
+# Without this, glibc holds onto freed memory, inflating RSS.
+os.environ.setdefault("MALLOC_TRIM_THRESHOLD_", "65536")
+os.environ.setdefault("MALLOC_MMAP_THRESHOLD_", "65536")
 
 from fastapi import FastAPI  # noqa: E402
 import uvicorn  # noqa: E402
@@ -258,12 +269,15 @@ async def _storage_cleanup_loop():
 
 
 async def _memory_monitor_loop():
-    """Log memory usage every 5 minutes for Cloud Shell visibility."""
+    """Log memory usage and trigger GC every 5 minutes for Cloud Shell visibility."""
     while True:
         try:
             await asyncio.sleep(300)
             kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
             log.info(f"[Memory] Peak RSS: {kb // 1024}MB")
+            # Manual GC sweep + compact after logging — reclaims fragmented memory
+            collected = gc.collect(generation=2)
+            log.debug(f"[Memory] GC collected {collected} objects")
         except Exception:
             pass
 

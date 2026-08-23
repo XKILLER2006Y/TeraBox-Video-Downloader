@@ -59,7 +59,7 @@ class MessageQueue:
                     await asyncio.sleep(rem)
 
                 #! Small gap between items to be gentle on Telegram API
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.3)
 
                 # Process under the concurrency semaphore
                 async with self.semaphore:

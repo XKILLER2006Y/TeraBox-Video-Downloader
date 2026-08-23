@@ -16,6 +16,12 @@ from urllib3.util.retry import Retry
 
 log = logging.getLogger(__name__)
 
+# ── TCP tuning ──────────────────────────────────────────────────────────────────
+# TCP_NODELAY disables Nagle: small API requests are sent immediately.
+# TCP receive buffer (64KB) speeds up bulk data reads from TeraBox CDN.
+_TCP_NODELAY = True
+_RECV_BUFFER = int(os.environ.get("TCP_RECV_BUFFER", "65536"))
+
 _browser_headers = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -39,6 +45,27 @@ USER_AGENTS = [
 
 _lock = threading.Lock()
 _session: requests.Session | None = None
+
+
+class _TCPAdapter(HTTPAdapter):
+    """HTTPAdapter that applies TCP_NODELAY + receive buffer tuning."""
+
+    def __init__(self, *args, nodelay=True, recv_buffer=0, **kwargs):
+        self._nodelay = nodelay
+        self._recv_buffer = recv_buffer
+        super().__init__(*args, **kwargs)
+
+    def init_poolmanager(self, *args, **kwargs):
+        kwargs["socket_options"] = []
+        if self._nodelay:
+            kwargs["socket_options"].append(
+                (socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            )
+        if self._recv_buffer:
+            kwargs["socket_options"].append(
+                (socket.SOL_SOCKET, socket.SO_RCVBUF, self._recv_buffer)
+            )
+        super().init_poolmanager(*args, **kwargs)
 
 # ── DNS cache ──────────────────────────────────────────────────────────────────
 # Avoids repeated DNS resolution for the same host across many concurrent
@@ -70,6 +97,8 @@ def get_session() -> requests.Session:
 
     Thread-safe. First call creates the session with connection
     pooling. Pool sizes configurable via CONN_POOL_SIZE env var.
+    Uses TCP_NODELAY for low-latency API calls and configurable
+    receive buffer for faster bulk downloads.
     """
     global _session
     if _session is not None:
@@ -80,15 +109,17 @@ def get_session() -> requests.Session:
         pool_size = int(os.environ.get("CONN_POOL_SIZE", "5"))
         s = requests.Session()
         s.headers.update(_browser_headers)
-        adapter = HTTPAdapter(
+        adapter = _TCPAdapter(
             pool_connections=pool_size,
             pool_maxsize=pool_size,
             max_retries=Retry(total=0),
+            nodelay=True,
+            recv_buffer=_RECV_BUFFER,
         )
         s.mount("https://", adapter)
         s.mount("http://", adapter)
         _session = s
-        log.info(f"HTTP session created (pool_size={pool_size})")
+        log.info(f"HTTP session created (pool_size={pool_size}, TCP_NODELAY=on, recv_buf={_RECV_BUFFER})")
         return _session
 
 

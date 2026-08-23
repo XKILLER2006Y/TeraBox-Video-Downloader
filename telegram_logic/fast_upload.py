@@ -3,6 +3,7 @@ FastTelethon: Parallel chunked uploads/downloads to Telegram.
 
 Based on the painor/FastTelethon gist (MIT licensed).
 Uses multiple parallel senders to Telegram DCs for faster uploads.
+Memory-efficient: reads chunks from disk instead of loading entire file.
 """
 import os
 import math
@@ -24,6 +25,7 @@ async def _send_partial(
     file_part,
     file_total_parts,
     file_size,
+    chunk_data,
     progress_callback=None,
 ):
     """Send a single chunk to Telegram."""
@@ -32,13 +34,21 @@ async def _send_partial(
             file_id=file_id,
             file_part=file_part,
             file_part_count=file_total_parts,
-            bytes=file_part,
+            bytes=chunk_data,
         )
     )
     if progress_callback:
-        # Calculate bytes sent for this part
-        bytes_sent = (file_part + 1) * CHUNK_SIZE if file_part < file_total_parts - 1 else file_size
+        bytes_sent = min((file_part + 1) * CHUNK_SIZE, file_size)
         progress_callback(bytes_sent, file_size)
+
+
+async def _read_chunk(f, offset, size):
+    """Read a chunk from file at offset — runs in thread pool to avoid blocking."""
+    loop = asyncio.get_running_loop()
+    def _do_read():
+        f.seek(offset)
+        return f.read(size)
+    return await loop.run_in_executor(None, _do_read)
 
 
 async def upload_file_fast(
@@ -49,13 +59,8 @@ async def upload_file_fast(
     """
     Upload a file to Telegram servers using parallel chunked uploads.
     
-    Args:
-        client: Telethon TelegramClient instance
-        file_path: Path to the file to upload
-        progress_callback: Optional callback(current, total) for progress updates
-    
-    Returns:
-        types.InputFileBig handle that can be used with send_file
+    Memory-efficient: reads chunks from disk sequentially instead of loading
+    the entire file into memory. Only MAX_PARALLEL chunks are in memory at once.
     """
     file_size = os.path.getsize(file_path)
     file_id = utils.generate_random_long()
@@ -63,36 +68,23 @@ async def upload_file_fast(
     
     log.info(f"Fast upload: {os.path.basename(file_path)} ({file_size / (1024*1024):.1f} MB, {file_total_parts} parts)")
     
-    # Read file into memory for parallel sending
-    with open(file_path, 'rb') as f:
-        file_data = f.read()
-    
-    # Split into chunks
-    chunks = []
-    for i in range(file_total_parts):
-        start = i * CHUNK_SIZE
-        end = min(start + CHUNK_SIZE, file_size)
-        chunks.append(file_data[start:end])
-    
-    # Send chunks in parallel
     sem = asyncio.Semaphore(MAX_PARALLEL)
     
-    async def _send_with_sem(part_idx, chunk):
+    async def _send_with_sem(part_idx):
         async with sem:
+            offset = part_idx * CHUNK_SIZE
+            size = min(CHUNK_SIZE, file_size - offset)
+            # Read chunk from disk (thread pool — non-blocking)
+            chunk_data = await _read_chunk(_file_handle, offset, size)
             await _send_partial(
-                client,
-                file_id,
-                chunk,
-                file_total_parts,
-                file_size,
-                progress_callback,
+                client, file_id, chunk_data, file_total_parts, file_size,
+                chunk_data, progress_callback,
             )
     
-    # Create tasks for all chunks
-    tasks = [_send_with_sem(i, chunk) for i, chunk in enumerate(chunks)]
-    
-    # Execute all uploads concurrently
-    await asyncio.gather(*tasks)
+    # Open file once, read chunks on demand — max MAX_PARALLEL chunks in RAM
+    with open(file_path, 'rb') as _file_handle:
+        tasks = [_send_with_sem(i) for i in range(file_total_parts)]
+        await asyncio.gather(*tasks)
     
     log.info(f"Fast upload complete: {os.path.basename(file_path)}")
     
@@ -111,20 +103,10 @@ async def download_file_fast(
 ) -> str:
     """
     Download a file from Telegram using parallel chunked downloads.
-    
-    Args:
-        client: Telethon TelegramClient instance
-        msg: Message containing the file to download
-        out: Output file path
-        progress_callback: Optional callback(current, total) for progress updates
-    
-    Returns:
-        Path to the downloaded file
     """
     if msg.media is None:
         raise ValueError("Message has no media to download")
     
-    # Get file location
     media = msg.media
     if hasattr(media, 'photo'):
         loc = media.photo
@@ -140,7 +122,6 @@ async def download_file_fast(
     
     log.info(f"Fast download: {name} ({file_size / (1024*1024):.1f} MB)")
     
-    # Calculate chunk size for download (1MB chunks for download)
     download_chunk = 1024 * 1024
     total_parts = math.ceil(file_size / download_chunk)
     
@@ -148,12 +129,7 @@ async def download_file_fast(
     
     with open(out, 'wb') as f:
         for part in range(total_parts):
-            if part == total_parts - 1:
-                # Last part might be smaller
-                data = await client._get_file(loc, part, total_parts)
-            else:
-                data = await client._get_file(loc, part, total_parts)
-            
+            data = await client._get_file(loc, part, total_parts)
             f.write(data)
             downloaded += len(data)
             
