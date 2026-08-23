@@ -17,18 +17,18 @@ echo ""
 
 # ── Step 1: Clone or update repo ─────────────────────────────────────────────
 if [ -d "$BOT_DIR/.git" ]; then
-    echo "[1/7] Repo exists, pulling latest..."
+    echo "[1/8] Repo exists, pulling latest..."
     cd "$BOT_DIR"
     git pull origin "$BRANCH" 2>/dev/null || true
 else
-    echo "[1/7] Cloning repo..."
+    echo "[1/8] Cloning repo..."
     rm -rf "$BOT_DIR"
     git clone --depth 1 -b "$BRANCH" "$REPO_URL" "$BOT_DIR"
     cd "$BOT_DIR"
 fi
 
 # ── Step 2: Install system dependencies ──────────────────────────────────────
-echo "[2/7] Installing system dependencies..."
+echo "[2/8] Installing system dependencies..."
 if command -v apt-get &>/dev/null; then
     sudo apt-get update -qq
     sudo apt-get install -y -qq ffmpeg python3-pip python3-venv screen > /dev/null 2>&1 || {
@@ -46,7 +46,7 @@ if ! command -v screen &>/dev/null; then
 fi
 
 # ── Step 3: Create venv and install Python deps ──────────────────────────────
-echo "[3/7] Setting up Python environment..."
+echo "[3/8] Setting up Python environment..."
 if [ ! -d "venv" ]; then
     python3 -m venv venv
 fi
@@ -57,7 +57,7 @@ echo "  → Python deps installed."
 
 # ── Step 4: Create .env if missing ────────────────────────────────────────────
 if [ ! -f "$ENV_FILE" ]; then
-    echo "[4/7] Creating .env template..."
+    echo "[4/8] Creating .env template..."
     cat > "$ENV_FILE" <<'ENVEOF'
 # ── Required ──────────────────────────────────────────────────────────────────
 BOT_TOKEN=
@@ -84,17 +84,33 @@ ENVEOF
     echo "  After editing, re-run this script."
     exit 0
 else
-    echo "[4/7] .env file exists."
+    echo "[4/8] .env file exists."
 fi
 
-# ── Validate required vars ────────────────────────────────────────────────────
-source <(grep -v '^\s*#' "$ENV_FILE" | sed 's/^/export /')
+# ── Validate required vars ───────────────────────────────────────────────────
+# Check that each required key exists and has a non-empty value.
+# FIREBASE_SECRETS can be multi-line JSON, so we use grep + wc to check.
 missing=()
-[ -z "${BOT_TOKEN:-}" ] && missing+=("BOT_TOKEN")
-[ -z "${APP_ID:-}" ] && missing+=("APP_ID")
-[ -z "${API_HASH:-}" ] && missing+=("API_HASH")
-[ -z "${STORAGE_GROUP_ID:-}" ] && missing+=("STORAGE_GROUP_ID")
-[ -z "${FIREBASE_SECRETS:-}" ] && missing+=("FIREBASE_SECRETS")
+
+check_env_key() {
+    local key="$1"
+    # Get the value: everything after first '=' up to next key or EOF
+    # Use awk to extract the value (handles multi-line values)
+    local val
+    val=$(awk -v key="^${key}=" '
+        $0 ~ key { found=1; sub(key, ""); val=$0; next }
+        found && /^[A-Z_]+=/ { exit }
+        found { val = val "\n" $0 }
+        END { print val }
+    ' "$ENV_FILE" | tr -d '[:space:]')
+    [ -z "$val" ] && missing+=("$key")
+}
+
+check_env_key "BOT_TOKEN"
+check_env_key "APP_ID"
+check_env_key "API_HASH"
+check_env_key "STORAGE_GROUP_ID"
+check_env_key "FIREBASE_SECRETS"
 
 if [ ${#missing[@]} -gt 0 ]; then
     echo ""
@@ -103,14 +119,20 @@ if [ ${#missing[@]} -gt 0 ]; then
     exit 1
 fi
 
+# ── Note: .env is read by python-dotenv at runtime (handles multi-line JSON) ──
+# FIREBASE_SECRETS can contain newlines — bash source cannot handle this.
+# python-dotenv in db.py handles it correctly.
+
 # ── Step 5: Stop any existing bot ─────────────────────────────────────────────
-echo "[5/7] Stopping any existing bot..."
+echo "[5/8] Stopping any existing bot..."
 screen -S terabox -X quit 2>/dev/null || true
+screen -S keepalive -X quit 2>/dev/null || true
 pkill -f "python main.py" 2>/dev/null || true
+pkill -f "cloud_shell_keepalive" 2>/dev/null || true
 sleep 1
 
 # ── Step 6: Create auto-restart wrapper ───────────────────────────────────────
-echo "[6/7] Creating auto-restart wrapper..."
+echo "[6/8] Creating auto-restart wrapper..."
 cat > "$BOT_DIR/run.sh" <<'RUNEOF'
 #!/usr/bin/env bash
 # Auto-restart wrapper — restarts bot on crash
@@ -129,10 +151,66 @@ done
 RUNEOF
 chmod +x "$BOT_DIR/run.sh"
 
-# ── Step 7: Start bot in screen ───────────────────────────────────────────────
-echo "[7/7] Starting bot in screen session..."
+# ── Step 7: Create keepalive script (prevents 20-min idle timeout) ───────────
+echo "[7/8] Setting up keepalive (prevents idle timeout)..."
+cat > "$BOT_DIR/cloud_shell_keepalive.sh" <<'KEEPALIVEOF'
+#!/usr/bin/env bash
+# Cloud Shell Keepalive — prevents idle timeout by touching files periodically.
+# Runs in a screen session named "keepalive".
+# Cloud Shell kills idle sessions after ~20 min. This script touches a file
+# every 5 minutes to simulate activity, extending the session to its full
+# 12-hour lifetime.
+KEEPALIVE_DIR="$HOME/.cloudshell"
+mkdir -p "$KEEPALIVE_DIR"
+echo "[$(date)] Keepalive started. Touching every 5 minutes."
+while true; do
+    touch "$KEEPALIVE_DIR/keepalive_$(date +%s)"
+    # Clean up old keepalive files (keep last 10)
+    ls -t "$KEEPALIVE_DIR"/keepalive_* 2>/dev/null | tail -n +11 | xargs rm -f 2>/dev/null || true
+    sleep 300
+done
+KEEPALIVEOF
+chmod +x "$BOT_DIR/cloud_shell_keepalive.sh"
+
+# Start keepalive in its own screen session
+screen -dmS keepalive bash -c "$BOT_DIR/cloud_shell_keepalive.sh"
+echo "  → Keepalive screen session running."
+
+# ── Step 8: Start bot in screen ───────────────────────────────────────────────
+echo "[8/8] Starting bot in screen session..."
 screen -dmS terabox bash -c "$BOT_DIR/run.sh"
 sleep 4
+
+# ── Install .bashrc auto-restart hook ─────────────────────────────────────────
+BASHRC_MARKER="# >>> terabox-bot auto-start (managed by deploy_gcloud.sh) >>>"
+if ! grep -qF "$BASHRC_MARKER" "$HOME/.bashrc" 2>/dev/null; then
+    cat >> "$HOME/.bashrc" <<'BASHRCEOF'
+
+# >>> terabox-bot auto-start (managed by deploy_gcloud.sh) >>>
+# When Cloud Shell restarts (after 12h timeout), auto-restart the bot.
+_terabox_autostart() {
+    if ! screen -ls 2>/dev/null | grep -q terabox; then
+        if [ -f "$HOME/terabox-bot/run.sh" ]; then
+            echo "[auto-start] Starting terabox bot..."
+            screen -dmS terabox bash -c "$HOME/terabox-bot/run.sh"
+        fi
+    fi
+    # Also ensure keepalive is running
+    if ! screen -ls 2>/dev/null | grep -q keepalive; then
+        if [ -f "$HOME/terabox-bot/cloud_shell_keepalive.sh" ]; then
+            echo "[auto-start] Starting keepalive..."
+            screen -dmS keepalive bash -c "$HOME/terabox-bot/cloud_shell_keepalive.sh"
+        fi
+    fi
+}
+_terabox_autostart
+unset -f _terabox_autostart
+# <<< terabox-bot auto-start <<<
+BASHRCEOF
+    echo "  → .bashrc auto-start hook installed."
+else
+    echo "  → .bashrc hook already present."
+fi
 
 # ── Verify ────────────────────────────────────────────────────────────────────
 if screen -ls 2>/dev/null | grep -q terabox; then
@@ -145,14 +223,13 @@ if screen -ls 2>/dev/null | grep -q terabox; then
     echo "║  Stop: screen -S terabox -X quit                    ║"
     echo "╚══════════════════════════════════════════════════════╝"
     echo ""
-    echo "  Features enabled:"
+    echo "  Features:"
     echo "  • Auto-restart on crash (run.sh wrapper)"
-    echo "  • Log rotation (5MB max, 2 backups)"
-    echo "  • Memory monitoring (every 5 min)"
-    echo "  • Aggressive storage cleanup (every 2 min)"
+    echo "  • Keepalive cron (prevents 20-min idle kill → full 12h)"
+    echo "  • Auto-start on Cloud Shell reopen (.bashrc hook)"
     echo ""
-    echo "  To restart after Cloud Shell restarts:"
-    echo "     cd $BOT_DIR && bash deploy_gcloud.sh"
+    echo "  ⚠️  Cloud Shell has a hard 12h lifetime."
+    echo "     After 12h, just reopen Cloud Shell — bot auto-restarts."
 else
     echo ""
     echo "  ❌ Bot failed to start. Check logs:"
