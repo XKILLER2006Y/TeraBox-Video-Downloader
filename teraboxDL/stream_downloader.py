@@ -21,13 +21,11 @@ import subprocess
 import shutil
 import threading
 import time
+import requests
 from urllib.parse import urlparse, urljoin
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
-
+from network import get_session
 from terabox.internal_helpers import CancelledError
 
 log = logging.getLogger(__name__)
@@ -54,17 +52,8 @@ HLS_PARALLEL_SEGMENTS = 4  # parallel segment download workers
 
 
 def _build_session() -> requests.Session:
-    """Create a requests session with connection pooling and browser headers."""
-    session = requests.Session()
-    session.headers.update(_BROWSER_HEADERS)
-    adapter = HTTPAdapter(
-        pool_connections=HLS_PARALLEL_SEGMENTS,
-        pool_maxsize=HLS_PARALLEL_SEGMENTS,
-        max_retries=Retry(total=0),
-    )
-    session.mount("https://", adapter)
-    session.mount("http://", adapter)
-    return session
+    """Return the global session singleton."""
+    return get_session()
 
 
 def is_streaming_manifest(url: str) -> bool:
@@ -90,7 +79,7 @@ def is_streaming_manifest(url: str) -> bool:
 
     # 3. Probe Content-Type via HEAD request (lightweight)
     try:
-        r = requests.head(url, headers=_PLAIN_HEADERS, timeout=10, allow_redirects=True)
+        r = get_session().head(url, headers=_PLAIN_HEADERS, timeout=10, allow_redirects=True)
         content_type = r.headers.get("Content-Type", "").lower()
         hls_types = ("application/vnd.apple.mpegurl", "application/x-mpegurl", "audio/mpegurl")
         dash_types = ("application/dash+xml",)
@@ -131,34 +120,31 @@ def _download_direct_file(
     log.info(f"Downloading direct file from: {url}")
 
     session = _build_session()
-    try:
-        with session.get(url, stream=True, timeout=120) as r:
-            r.raise_for_status()
-            total = int(r.headers.get("content-length", 0))
-            downloaded = 0
+    with session.get(url, stream=True, timeout=120) as r:
+        r.raise_for_status()
+        total = int(r.headers.get("content-length", 0))
+        downloaded = 0
 
-            with open(output_file, "wb") as f:
-                for chunk in r.iter_content(chunk_size=CHUNK_SIZE):
-                    if cancel_event and cancel_event.is_set():
-                        raise CancelledError("Download cancelled")
-                    if not chunk:
-                        continue
-                    f.write(chunk)
-                    downloaded += len(chunk)
+        with open(output_file, "wb") as f:
+            for chunk in r.iter_content(chunk_size=CHUNK_SIZE):
+                if cancel_event and cancel_event.is_set():
+                    raise CancelledError("Download cancelled")
+                if not chunk:
+                    continue
+                f.write(chunk)
+                downloaded += len(chunk)
 
-                    if total:
-                        pct = downloaded / total * 100
-                        log.info(
-                            f"Downloading: {pct:5.1f}% "
-                            f"({downloaded / 1e6:.1f} MB / {total / 1e6:.1f} MB)"
-                        )
-                    else:
-                        log.info(f"Downloading: {downloaded / 1e6:.1f} MB")
+                if total:
+                    pct = downloaded / total * 100
+                    log.info(
+                        f"Downloading: {pct:5.1f}% "
+                        f"({downloaded / 1e6:.1f} MB / {total / 1e6:.1f} MB)"
+                    )
+                else:
+                    log.info(f"Downloading: {downloaded / 1e6:.1f} MB")
 
-                    if progress_callback:
-                        progress_callback(downloaded, total)
-    finally:
-        session.close()
+                if progress_callback:
+                    progress_callback(downloaded, total)
 
     log.info(f"Direct download saved to {output_file}")
 
@@ -172,12 +158,9 @@ def _download_hls_segments(
     """Fetch a remote m3u8 manifest and download all segments."""
     log.info(f"Fetching m3u8 manifest from: {manifest_url}")
     session = _build_session()
-    try:
-        r = session.get(manifest_url, timeout=30)
-        r.raise_for_status()
-        manifest_text = r.text
-    finally:
-        session.close()
+    r = session.get(manifest_url, timeout=30)
+    r.raise_for_status()
+    manifest_text = r.text
     log.info(f"Manifest content ({len(manifest_text)} bytes):\n{manifest_text[:200]}...")
 
     _download_hls_from_manifest(manifest_text, manifest_url, output_file, cancel_event, progress_callback)
@@ -233,50 +216,47 @@ def _download_hls_from_manifest(
         parsed = urlparse(seg_url)
         session.headers["Referer"] = f"{parsed.scheme}://{parsed.netloc}/"
 
-        try:
-            for attempt in range(3):
-                if cancel_event and cancel_event.is_set():
-                    raise CancelledError("Download cancelled")
-                try:
-                    seg_r = session.get(seg_url, stream=True, timeout=60)
-                    seg_r.raise_for_status()
-                    seg_bytes = 0
-                    with open(part_paths[seg_index], "wb") as f:
-                        for chunk in seg_r.iter_content(chunk_size=CHUNK_SIZE):
-                            if cancel_event and cancel_event.is_set():
-                                raise CancelledError("Download cancelled")
-                            if not chunk:
-                                continue
-                            f.write(chunk)
-                            seg_bytes += len(chunk)
+        for attempt in range(3):
+            if cancel_event and cancel_event.is_set():
+                raise CancelledError("Download cancelled")
+            try:
+                seg_r = session.get(seg_url, stream=True, timeout=60)
+                seg_r.raise_for_status()
+                seg_bytes = 0
+                with open(part_paths[seg_index], "wb") as f:
+                    for chunk in seg_r.iter_content(chunk_size=CHUNK_SIZE):
+                        if cancel_event and cancel_event.is_set():
+                            raise CancelledError("Download cancelled")
+                        if not chunk:
+                            continue
+                        f.write(chunk)
+                        seg_bytes += len(chunk)
 
-                            with progress_lock:
-                                shared_progress[0] += len(chunk)
-                                done = shared_progress[0]
+                        with progress_lock:
+                            shared_progress[0] += len(chunk)
+                            done = shared_progress[0]
 
-                            elapsed = time.time() - start_time
-                            speed = (done / (1024 * 1024)) / elapsed if elapsed > 0 else 0
-                            print(
-                                f"\r    Downloading: {done / (1024 * 1024):.2f} MB  "
-                                f"{speed:.1f} MB/s  "
-                                f"[{seg_index + 1}/{num_segments} segments]",
-                                end="", flush=True,
-                            )
-                            if progress_callback:
-                                progress_callback(done, 0)
-                    return seg_bytes
-                except CancelledError:
-                    raise
-                except Exception as e:
-                    if attempt == 2:
-                        raise Exception(
-                            f"Segment {seg_index + 1} failed after 3 attempts: {e}"
+                        elapsed = time.time() - start_time
+                        speed = (done / (1024 * 1024)) / elapsed if elapsed > 0 else 0
+                        print(
+                            f"\r    Downloading: {done / (1024 * 1024):.2f} MB  "
+                            f"{speed:.1f} MB/s  "
+                            f"[{seg_index + 1}/{num_segments} segments]",
+                            end="", flush=True,
                         )
-                    log.warning(f"Segment {seg_index + 1} attempt {attempt + 1} failed: {e}, retrying...")
-                    time.sleep(1 + attempt)
-            return 0
-        finally:
-            session.close()
+                        if progress_callback:
+                            progress_callback(done, 0)
+                return seg_bytes
+            except CancelledError:
+                raise
+            except Exception as e:
+                if attempt == 2:
+                    raise Exception(
+                        f"Segment {seg_index + 1} failed after 3 attempts: {e}"
+                    )
+                log.warning(f"Segment {seg_index + 1} attempt {attempt + 1} failed: {e}, retrying...")
+                time.sleep(1 + attempt)
+        return 0
 
     try:
         with ThreadPoolExecutor(max_workers=HLS_PARALLEL_SEGMENTS) as executor:
@@ -354,10 +334,10 @@ def download_from_stream_url(
     Automatically detects whether the URL is an HLS/DASH manifest or a
     direct file link and uses the appropriate download strategy.
 
-    Also supports local M3U8 file paths (from chunk discovery).
+    Also supports M3U8 manifest text (from chunk discovery) and local file paths.
 
     Args:
-        stream_url:        The stream URL or local M3U8 file path.
+        stream_url:        The stream URL, M3U8 text, or local M3U8 file path.
         output_file:       Path where the downloaded file will be saved.
         cancel_event:      Optional threading.Event for cancellation.
         progress_callback: Optional callback(downloaded_bytes, total_bytes).
@@ -376,8 +356,25 @@ def download_from_stream_url(
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
 
+    # Detect M3U8 manifest text (from chunk discovery — no file path, no URL)
+    if "#EXTM3U" in stream_url:
+        log.info("Detected M3U8 manifest text (inline)")
+        if not output_file.lower().endswith(".mp4"):
+            output_file = os.path.splitext(output_file)[0] + ".mp4"
+        # Write manifest to temp file for the HLS downloader to read
+        import tempfile
+        m3u8_tmp = os.path.join(tempfile.gettempdir(), f"manifest_{id(stream_url) & 0xFFFF:04x}.m3u8")
+        with open(m3u8_tmp, "w") as f:
+            f.write(stream_url)
+        try:
+            _download_hls_segments_local(m3u8_tmp, output_file, cancel_event, progress_callback)
+        finally:
+            try:
+                os.remove(m3u8_tmp)
+            except OSError:
+                pass
     # Check if stream_url is a local file path (M3U8 from chunk discovery)
-    if not stream_url.startswith("http") and os.path.isfile(stream_url):
+    elif not stream_url.startswith("http") and os.path.isfile(stream_url):
         log.info(f"Detected local M3U8 playlist: {stream_url}")
         if not output_file.lower().endswith(".mp4"):
             output_file = os.path.splitext(output_file)[0] + ".mp4"

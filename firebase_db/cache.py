@@ -26,6 +26,7 @@ Search priority (same as old Gist implementation):
 import base64
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Literal
 
 from .db import db
@@ -86,8 +87,7 @@ def search_in_cache(surl: str, user_mode: MODE) -> int:
       exp   → exphd, exp
       exphd → exphd only
 
-    Each bucket is fetched lazily and only if the previous ones missed,
-    minimising Firestore reads on hits in high-priority buckets.
+    Parallelizes Firestore reads for lower latency on misses.
     """
     safe_key = _encode_key(surl)
 
@@ -100,18 +100,35 @@ def search_in_cache(surl: str, user_mode: MODE) -> int:
     else:  # exphd
         search_order = ["exphd"]
 
-    for bucket in search_order:
+    def _read_bucket(bucket: str) -> tuple[str, int]:
+        """Read a single bucket and return (bucket_name, msg_id)."""
         try:
             snap = _bucket_ref(bucket).get(field_paths=[safe_key])
             if snap.exists:
                 data = snap.to_dict() or {}
                 msg_id = data.get(safe_key, -1)
-                if msg_id != -1:
-                    log.info(f"Cache hit: bucket={bucket}, surl={surl}, msg_id={msg_id} (user_mode={user_mode})")
-                    return int(msg_id)
+                return (bucket, int(msg_id))
         except Exception as e:
             log.error(f"[DB] search_in_cache failed for bucket={bucket}, surl={surl}: {e}")
-            # Continue trying remaining buckets — return -1 at end on full failure
+        return (bucket, -1)
+
+    # For single-bucket modes, skip threading overhead
+    if len(search_order) == 1:
+        _, msg_id = _read_bucket(search_order[0])
+        if msg_id != -1:
+            log.info(f"Cache hit: bucket={search_order[0]}, surl={surl}, msg_id={msg_id} (user_mode={user_mode})")
+            return msg_id
+        log.debug(f"Cache miss: surl={surl} (user_mode={user_mode})")
+        return -1
+
+    # Parallel reads for multi-bucket search
+    with ThreadPoolExecutor(max_workers=len(search_order)) as pool:
+        results = list(pool.map(_read_bucket, search_order))
+
+    for bucket, msg_id in results:
+        if msg_id != -1:
+            log.info(f"Cache hit: bucket={bucket}, surl={surl}, msg_id={msg_id} (user_mode={user_mode})")
+            return msg_id
 
     log.debug(f"Cache miss: surl={surl} (user_mode={user_mode})")
     return -1
@@ -119,10 +136,10 @@ def search_in_cache(surl: str, user_mode: MODE) -> int:
 
 def get_cache_for_random() -> dict:
     """
-    Return a merged flat dict of ALL 3 buckets for /random.
+    Return a merged flat dict of ALL 4 buckets for /random.
 
     Refreshes from Firestore at most every 15 minutes (TTL-based snapshot).
-    Merge order: get → exp → exphd  (exphd wins on key conflicts, highest quality).
+    Merge order: get → exp → exphd → dw  (exphd wins on key conflicts, highest quality).
 
     Returns an empty dict on DB error.
     """
@@ -135,17 +152,25 @@ def get_cache_for_random() -> dict:
 
     log.info("Refreshing /random snapshot from Firestore")
 
-    merged: dict = {}
-    for bucket in _BUCKETS:
+    def _read_bucket(bucket: str) -> tuple[str, dict]:
+        """Read a single bucket and return (bucket_name, data_dict)."""
         try:
             snap = _bucket_ref(bucket).get()
             if snap.exists:
-                bucket_data = snap.to_dict() or {}
-                # Decode keys back to surls before merging
-                merged.update({_decode_key(k): v for k, v in bucket_data.items()})
+                data = snap.to_dict() or {}
+                decoded = {_decode_key(k): v for k, v in data.items()}
+                return (bucket, decoded)
         except Exception as e:
             log.error(f"[DB] get_cache_for_random failed for bucket={bucket}: {e}")
-            # Continue with remaining buckets
+        return (bucket, {})
+
+    # Parallel reads for all buckets
+    with ThreadPoolExecutor(max_workers=len(_BUCKETS)) as pool:
+        results = list(pool.map(_read_bucket, _BUCKETS))
+
+    merged: dict = {}
+    for _, bucket_data in results:
+        merged.update(bucket_data)
 
     _RANDOM_SNAPSHOT["data"]      = merged
     _RANDOM_SNAPSHOT["timestamp"] = time.time()

@@ -18,9 +18,9 @@ Supported platforms:
     - MediaFire
 """
 import logging
-import requests
 from typing import Callable
 
+from network import get_session
 from filesaddaDL import is_filesadda_url, extract_fileadda_url, resolve_filesadda, FilesAddaError
 from gofileDL import is_gofile_url, extract_gofile_url, resolve_gofile, GoFileError
 from streamtapeDL import is_streamtape_url, extract_streamtape_url, resolve_streamtape, StreamTapeError
@@ -82,7 +82,7 @@ def extract_universal_urls(text: str) -> list[str]:
     return urls
 
 
-def resolve_universal(url: str, session: requests.Session | None = None) -> dict:
+def resolve_universal(url: str, session=None) -> dict:
     """
     Resolve any supported URL to download info.
 
@@ -92,11 +92,12 @@ def resolve_universal(url: str, session: requests.Session | None = None) -> dict
     Raises:
         UniversalDL: If no handler matches or resolution fails
     """
+    sess = session or get_session()
     for checker, resolver, error_cls, name in _ROUTES:
         if checker(url):
             logger.info(f"Routing to {name}: {url}")
             try:
-                return resolver(url, session=session)
+                return resolver(url, session=sess)
             except error_cls as e:
                 raise UniversalDL(f"{name} resolution failed: {e}") from e
             except Exception as e:

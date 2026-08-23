@@ -6,6 +6,8 @@ import logging
 import requests
 from urllib.parse import unquote, urlparse, urlunparse, urlencode, parse_qs
 
+from network import get_session
+
 log = logging.getLogger(__name__)
 
 
@@ -72,9 +74,9 @@ def _extract_surl(terabox_url: str) -> str:
     raise Exception(f"Could not extract surl from URL: {terabox_url}")
 
 
-def _load_session(cookies_str: str = "") -> requests.Session:
-    """Create a session, optionally loading cookies."""
-    session = requests.Session()
+def _load_session(cookies_str: str = ""):
+    """Return the global session, optionally loading cookies into it."""
+    session = get_session()
     if cookies_str:
         for c in cookies_str.split(";"):
             if "=" in c:
@@ -120,7 +122,7 @@ def _get_js_token(session: requests.Session, surl: str) -> str:
         except requests.RequestException as e:
             last_err = f"Network error: {e}"
         if attempt < 2:
-            time.sleep(2)
+            time.sleep(0.5)
     raise TeraBoxDirectError(f"Could not extract jsToken: {last_err}")
 
 
@@ -182,7 +184,9 @@ def _build_streaming_url(shareid, uk, sign, timestamp, fs_id, quality: str) -> s
 def _discover_all_hls_chunks(session, shareid, uk, sign, timestamp, fs_id, surl) -> str:
     """
     Poll the TeraBox streaming endpoint to collect all HLS chunks,
-    then build a local M3U8 playlist and return its file path.
+    then build an M3U8 playlist and return it as a string (not a file).
+
+    Returns the M3U8 manifest text directly — avoids disk write/read.
     """
     quality = "M3U8_AUTO_1080"
     known = {}
@@ -196,21 +200,13 @@ def _discover_all_hls_chunks(session, shareid, uk, sign, timestamp, fs_id, surl)
         url = _build_streaming_url(shareid, uk, sign, timestamp, fs_id, quality)
         try:
             text = session.get(url, headers=_headers(session, surl), timeout=60).text.strip()
-        except requests.ConnectionError:
-            log.warning(f"HLS chunk discovery: connection error on request {req_count}, retrying...")
-            time.sleep(2)
-            continue
-        except requests.Timeout:
-            log.warning(f"HLS chunk discovery: timeout on request {req_count}, retrying...")
-            time.sleep(2)
-            continue
-        except requests.RequestException as e:
-            log.warning(f"HLS chunk discovery: network error on request {req_count}: {e}")
+        except Exception as e:
+            log.warning(f"HLS chunk discovery: error on request {req_count}: {e}")
             time.sleep(2)
             continue
 
         if not text.startswith("#EXTM3U"):
-            time.sleep(random.uniform(0.5, 1.5))
+            time.sleep(0.5)
             continue
 
         segs = [l.strip() for l in text.split("\n") if l.strip() and not l.startswith("#")]
@@ -255,32 +251,25 @@ def _discover_all_hls_chunks(session, shareid, uk, sign, timestamp, fs_id, surl)
 
     log.info(f"Discovered {len(known)}/{max_known_idx + 1} chunks in {req_count} requests")
 
-    # Build a local M3U8 playlist file
-    import tempfile
-    m3u8_path = os.path.join(tempfile.gettempdir(), f"terabox_{surl}.m3u8")
-    with open(m3u8_path, "w") as f:
-        f.write("#EXTM3U\n#EXT-X-VERSION:3\n")
-        for idx in sorted(known):
-            chunk_url, ts_size = known[idx]
-            duration = ts_size / (256 * 1024)  # approximate 256kbps per chunk
-            f.write(f"#EXTINF:{duration:.3f},\n{chunk_url}\n")
-        f.write("#EXT-X-ENDLIST\n")
-
-    return m3u8_path
+    # Build M3U8 playlist as string (no disk I/O)
+    lines = ["#EXTM3U\n#EXT-X-VERSION:3\n"]
+    for idx in sorted(known):
+        chunk_url, ts_size = known[idx]
+        duration = ts_size / (256 * 1024)
+        lines.append(f"#EXTINF:{duration:.3f},\n{chunk_url}\n")
+    lines.append("#EXT-X-ENDLIST\n")
+    return "".join(lines)
 
 
 def _get_video_metadata(terabox_url: str) -> dict:
     """
     Resolve TeraBox metadata directly (no proxy needed).
 
-    For non-HD mode: discovers all HLS chunks and returns a local M3U8 playlist path.
+    For non-HD mode: discovers all HLS chunks and returns M3U8 manifest text.
     For HD mode: returns the direct download link.
     """
     surl = _extract_surl(terabox_url)
     log.info(f"Resolving TeraBox metadata for surl={surl}")
-
-    # Random jitter to stagger concurrent requests
-    time.sleep(random.uniform(0.1, 2.0))
 
     # Create session (with cookies if available, without for basic share page)
     cookies_str = os.getenv("COOKIES1", "")
@@ -319,25 +308,24 @@ def _get_video_metadata(terabox_url: str) -> dict:
         )
 
     # Step 3: Build streaming URL and discover all HLS chunks
-    m3u8_path = _discover_all_hls_chunks(session, shareid, uk, sign, timestamp, fs_id, surl)
+    m3u8_text = _discover_all_hls_chunks(session, shareid, uk, sign, timestamp, fs_id, surl)
 
-    # Return metadata in the format expected by get_video_info()
+    # Return metadata with M3U8 text (no file path — avoids disk I/O)
     return {
         "list": [{
             "server_filename": files[0].get("server_filename", "video.mp4"),
             "size": int(files[0].get("size", 0)),
-            "stream_url": m3u8_path,  # local M3U8 playlist with all chunks
+            "stream_url": m3u8_text,  # M3U8 manifest text (not a file path)
             "direct_link": "",  # HD direct link (not available without premium)
         }]
     }
 
 def _get_file_size_bytes(stream_download_url: str) -> int:
     try:
-        response = requests.head(
+        response = get_session().head(
             stream_download_url,
             allow_redirects=True,
             timeout=15,
-            headers={"User-Agent": random.choice(USER_AGENTS)},
         )
         content_length = response.headers.get('Content-Length')
         if content_length is None:
@@ -383,11 +371,8 @@ def get_video_info(terabox_url: str, is_hd: bool) -> dict:
         }
     else:
         download_url = file_info.get("stream_url", "")
-        # If stream_url is a local M3U8 file path, get its size; otherwise HEAD request
-        if download_url and not download_url.startswith("http"):
-            # Local M3U8 playlist — size comes from share metadata.
-            # NOTE: the temp M3U8 must NOT be deleted here — the download
-            # pipeline still needs to read it. Pipelines clean it up.
+        # If stream_url is M3U8 text (not a file path or URL), get size from metadata
+        if download_url and not download_url.startswith("http") and not download_url.startswith("/") and "#EXTM3U" in download_url:
             file_size = int(file_info.get("size", 0))
         elif download_url:
             file_size = _get_file_size_bytes(download_url)

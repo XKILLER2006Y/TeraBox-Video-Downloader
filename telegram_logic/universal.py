@@ -14,10 +14,13 @@ import logging
 import threading
 import time
 
+import requests
+
 from telegram_logic.bot import (
     _safe_send, STORAGE_GROUP_ID,
 )
 from universalDL import resolve_universal, UniversalDL
+from network import get_session
 
 logger = logging.getLogger(__name__)
 
@@ -152,8 +155,6 @@ async def process_universal(event, url: str, bot) -> None:
 
 def _download_file(url: str, filename: str, headers: dict, cancel_event: threading.Event) -> str | None:
     """Download a file via HTTP with progress tracking."""
-    import requests as req
-
     dl_dir = os.path.join(os.path.dirname(__file__), '..', 'storage')
     os.makedirs(dl_dir, exist_ok=True)
 
@@ -163,13 +164,11 @@ def _download_file(url: str, filename: str, headers: dict, cancel_event: threadi
         safe_name = "download"
     filepath = os.path.join(dl_dir, safe_name)
 
-    dl_headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131',
-        **headers,
-    }
+    dl_headers = {**headers}
 
     try:
-        resp = req.get(url, headers=dl_headers, stream=True, timeout=300)
+        session = get_session()
+        resp = session.get(url, headers=dl_headers, stream=True, timeout=300)
         resp.raise_for_status()
 
         with open(filepath, 'wb') as f:
@@ -182,7 +181,7 @@ def _download_file(url: str, filename: str, headers: dict, cancel_event: threadi
 
         return filepath if os.path.getsize(filepath) > 0 else None
 
-    except req.RequestException as e:
+    except requests.RequestException as e:
         logger.error(f"Download failed: {e}")
         if os.path.exists(filepath):
             os.remove(filepath)
