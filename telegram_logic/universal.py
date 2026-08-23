@@ -154,7 +154,7 @@ async def process_universal(event, url: str, bot) -> None:
 
 
 def _download_file(url: str, filename: str, headers: dict, cancel_event: threading.Event) -> str | None:
-    """Download a file via HTTP with progress tracking."""
+    """Download a file via HTTP with progress tracking and retry backoff."""
     dl_dir = os.path.join(os.path.dirname(__file__), '..', 'storage')
     os.makedirs(dl_dir, exist_ok=True)
 
@@ -164,25 +164,34 @@ def _download_file(url: str, filename: str, headers: dict, cancel_event: threadi
         safe_name = "download"
     filepath = os.path.join(dl_dir, safe_name)
 
-    dl_headers = {**headers}
+    max_retries = 3
+    for attempt in range(max_retries):
+        if cancel_event.is_set():
+            return None
 
-    try:
-        session = get_session()
-        resp = session.get(url, headers=dl_headers, stream=True, timeout=300)
-        resp.raise_for_status()
+        try:
+            session = get_session()
+            resp = session.get(url, headers=headers, stream=True, timeout=300)
+            resp.raise_for_status()
 
-        with open(filepath, 'wb') as f:
-            for chunk in resp.iter_content(chunk_size=1024 * 1024):
-                if cancel_event.is_set():
-                    logger.info("Download cancelled")
-                    return None
-                if chunk:
-                    f.write(chunk)
+            with open(filepath, 'wb') as f:
+                for chunk in resp.iter_content(chunk_size=1024 * 1024):
+                    if cancel_event.is_set():
+                        logger.info("Download cancelled")
+                        return None
+                    if chunk:
+                        f.write(chunk)
 
-        return filepath if os.path.getsize(filepath) > 0 else None
+            if os.path.getsize(filepath) > 0:
+                return filepath
+            return None
 
-    except requests.RequestException as e:
-        logger.error(f"Download failed: {e}")
-        if os.path.exists(filepath):
-            os.remove(filepath)
-        return None
+        except requests.RequestException as e:
+            logger.warning(f"Download attempt {attempt + 1}/{max_retries} failed: {e}")
+            if os.path.exists(filepath):
+                os.remove(filepath)
+            if attempt < max_retries - 1:
+                backoff = 2 ** attempt
+                time.sleep(backoff)
+
+    return None

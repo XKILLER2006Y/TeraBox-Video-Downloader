@@ -3,12 +3,18 @@ import re
 import time
 import random
 import logging
+import threading
 import requests
 from urllib.parse import unquote, urlparse, urlunparse, urlencode, parse_qs
 
 from network import get_session, USER_AGENTS
 
 log = logging.getLogger(__name__)
+
+# Cookie validation cache — avoid re-validating on every download
+_cookie_cache: dict = {}  # cookies_str -> (is_valid, expiry)
+_cookie_cache_lock = threading.Lock()
+_COOKIE_CACHE_TTL = 300  # 5 minutes
 
 
 class TeraBoxDirectError(Exception):
@@ -108,21 +114,40 @@ def _validate_cookies(session: requests.Session, cookies_str: str = "") -> bool:
 def _get_valid_cookies() -> str:
     """
     Get valid cookies from environment, checking all COOKIES1..N variables.
-    
+    Caches validation results for 5 minutes to avoid repeated test requests.
     Returns the first valid cookie string, or empty string if none found.
     """
-    import os
+    now = time.time()
     
     # Try COOKIES1 through COOKIES5
     for i in range(1, 6):
         cookies_str = os.getenv(f"COOKIES{i}", "")
-        if cookies_str:
-            session = get_session()
-            if _validate_cookies(session, cookies_str):
-                log.info(f"Using valid cookies from COOKIES{i}")
-                return cookies_str
-            else:
-                log.warning(f"COOKIES{i} is invalid or expired")
+        if not cookies_str:
+            continue
+        
+        # Check cache first
+        with _cookie_cache_lock:
+            cached = _cookie_cache.get(cookies_str)
+            if cached and cached[1] > now:
+                if cached[0]:
+                    log.info(f"Using cached valid cookies from COOKIES{i}")
+                    return cookies_str
+                else:
+                    continue  # Cached as invalid, skip
+        
+        # Validate
+        session = get_session()
+        is_valid = _validate_cookies(session, cookies_str)
+        
+        # Cache result
+        with _cookie_cache_lock:
+            _cookie_cache[cookies_str] = (is_valid, now + _COOKIE_CACHE_TTL)
+        
+        if is_valid:
+            log.info(f"Using valid cookies from COOKIES{i}")
+            return cookies_str
+        else:
+            log.warning(f"COOKIES{i} is invalid or expired")
     
     return ""
 

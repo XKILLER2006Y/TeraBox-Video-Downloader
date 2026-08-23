@@ -41,6 +41,9 @@ _PLAIN_HEADERS = {
 CHUNK_SIZE = 1 * 1024 * 1024  # 1 MB
 HLS_PARALLEL_SEGMENTS = 4  # parallel segment download workers
 
+# Module-level executor — reused across HLS downloads to avoid thread creation overhead
+_hls_executor = ThreadPoolExecutor(max_workers=HLS_PARALLEL_SEGMENTS, thread_name_prefix="hls-dl")
+
 
 def _build_session() -> requests.Session:
     """Return the global session singleton."""
@@ -249,13 +252,12 @@ def _download_hls_from_manifest(
         return 0
 
     try:
-        with ThreadPoolExecutor(max_workers=HLS_PARALLEL_SEGMENTS) as executor:
-            futures = {
-                executor.submit(_download_segment, url, i): i
-                for i, url in enumerate(segment_urls)
-            }
-            for future in as_completed(futures):
-                future.result()  # re-raise any exception
+        futures = {
+            _hls_executor.submit(_download_segment, url, i): i
+            for i, url in enumerate(segment_urls)
+        }
+        for future in as_completed(futures):
+            future.result()  # re-raise any exception
 
         # Concatenate segments in order
         with open(ts_output, "wb") as out:

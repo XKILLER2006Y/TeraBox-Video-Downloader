@@ -106,7 +106,7 @@ def get_session() -> requests.Session:
     with _lock:
         if _session is not None:
             return _session
-        pool_size = int(os.environ.get("CONN_POOL_SIZE", "5"))
+        pool_size = int(os.environ.get("CONN_POOL_SIZE", "20"))
         s = requests.Session()
         s.headers.update(_browser_headers)
         adapter = _TCPAdapter(

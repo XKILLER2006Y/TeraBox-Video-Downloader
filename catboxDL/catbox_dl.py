@@ -18,6 +18,10 @@ from network import get_session
 
 logger = logging.getLogger(__name__)
 
+_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131',
+}
+
 
 class CatBoxError(Exception):
     """Base exception for CatBox resolver."""
@@ -51,13 +55,10 @@ def resolve_catbox(url: str, session: requests.Session | None = None) -> dict:
     Returns: {"filename": str, "size": int, "download_url": str}
     """
     sess = session or get_session()
-    sess.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131',
-    })
 
     # HEAD to get metadata
     try:
-        resp = sess.head(url, timeout=15, allow_redirects=True)
+        resp = sess.head(url, headers=_HEADERS, timeout=15, allow_redirects=True)
     except requests.RequestException as e:
         raise CatBoxError(f"Failed to check CatBox URL: {e}") from e
 

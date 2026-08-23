@@ -22,6 +22,12 @@ from network import get_session
 
 logger = logging.getLogger(__name__)
 
+_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.5',
+}
+
 
 class FilesAddaError(Exception):
     """Base exception for filesadda resolver."""
@@ -171,15 +177,8 @@ def resolve_filesadda(url: str, session: requests.Session | None = None) -> dict
         FilesAddaError: Any other resolution error
     """
     sess = session or get_session()
-    sess.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
-    })
-
-    # ── Step 1: GET the page ──────────────────────────────────────────────
     try:
-        resp = sess.get(url, timeout=20, allow_redirects=True)
+        resp = sess.get(url, headers=_HEADERS, timeout=20, allow_redirects=True)
     except requests.RequestException as e:
         raise FilesAddaError(f"Failed to fetch page: {e}") from e
 
@@ -219,7 +218,7 @@ def resolve_filesadda(url: str, session: requests.Session | None = None) -> dict
             post_data['method_premium'] = 'Premium Download'
 
         try:
-            resp2 = sess.post(url, data=post_data, timeout=20, allow_redirects=True)
+            resp2 = sess.post(url, data=post_data, headers=_HEADERS, timeout=20, allow_redirects=True)
             html2 = resp2.text
         except requests.RequestException as e:
             raise FilesAddaError(f"Download form submission failed: {e}") from e
@@ -245,7 +244,7 @@ def resolve_filesadda(url: str, session: requests.Session | None = None) -> dict
         post_data2 = {'op': 'download3', **hidden2}
 
         try:
-            resp3 = sess.post(url, data=post_data2, timeout=20, allow_redirects=True)
+            resp3 = sess.post(url, data=post_data2, headers=_HEADERS, timeout=20, allow_redirects=True)
             html3 = resp3.text
         except requests.RequestException as e:
             raise FilesAddaError(f"Download link fetch failed: {e}") from e

@@ -15,6 +15,10 @@ from network import get_session
 
 logger = logging.getLogger(__name__)
 
+_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0',
+}
+
 
 class GoFileError(Exception):
     """Base exception for GoFile resolver."""
@@ -56,15 +60,11 @@ def resolve_gofile(url: str, session: requests.Session | None = None) -> dict:
     Returns: {"filename": str, "size": int, "download_url": str}
     """
     sess = session or get_session()
-    sess.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0',
-    })
-
     content_id = _get_content_id(url)
 
     # Step 1: Get best server
     try:
-        srv_resp = sess.get('https://api.gofile.io/servers', timeout=15)
+        srv_resp = sess.get('https://api.gofile.io/servers', headers=_HEADERS, timeout=15)
         srv_data = srv_resp.json()
         if srv_data.get('status') != 'ok':
             raise GoFileError(f"GoFile server list failed: {srv_data}")
@@ -75,7 +75,7 @@ def resolve_gofile(url: str, session: requests.Session | None = None) -> dict:
     # Step 2: Get content info (no token needed for public content)
     try:
         content_url = f'https://{server}.gofile.io/contents/{content_id}'
-        resp = sess.get(content_url, timeout=20)
+        resp = sess.get(content_url, headers=_HEADERS, timeout=20)
         data = resp.json()
     except requests.RequestException as e:
         raise GoFileError(f"GoFile content fetch failed: {e}") from e

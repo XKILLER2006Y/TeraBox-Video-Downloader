@@ -21,6 +21,9 @@ CHUNK_SIZE = 1 * 1024 * 1024  # 1 MB per read chunk within each part
 # 4 connections → ~4x throughput on CDNs that allow range requests.
 PARALLEL_PARTS = 4
 
+# Module-level executor — reused across downloads to avoid thread creation overhead
+_dl_executor = ThreadPoolExecutor(max_workers=PARALLEL_PARTS, thread_name_prefix="terabox-dl")
+
 # Browser-identical headers — this is the #1 reason for throttling.
 # TeraBox CDN checks User-Agent and throttles python-requests to ~100KB/s.
 _BROWSER_HEADERS = {
@@ -211,25 +214,24 @@ def _download_video_multipart(
     start_time = time.time()
 
     try:
-        with ThreadPoolExecutor(max_workers=PARALLEL_PARTS) as executor:
-            futures = {
-                executor.submit(
-                    _download_part,
-                    download_url,
-                    ranges[i][0], ranges[i][1],
-                    part_paths[i],
-                    i,
-                    progress_lock,
-                    shared_progress,
-                    total_size,
-                    start_time,
-                    cancel_event,
-                    progress_callback,
-                ): i
-                for i in range(PARALLEL_PARTS)
-            }
-            for future in as_completed(futures):
-                future.result()  # re-raise any exception from the part thread
+        futures = {
+            _dl_executor.submit(
+                _download_part,
+                download_url,
+                ranges[i][0], ranges[i][1],
+                part_paths[i],
+                i,
+                progress_lock,
+                shared_progress,
+                total_size,
+                start_time,
+                cancel_event,
+                progress_callback,
+            ): i
+            for i in range(PARALLEL_PARTS)
+        }
+        for future in as_completed(futures):
+            future.result()  # re-raise any exception from the part thread
 
         # Stitch parts together
         with open(download_path, "wb") as out:

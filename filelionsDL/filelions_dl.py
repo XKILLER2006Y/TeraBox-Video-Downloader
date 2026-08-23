@@ -16,6 +16,10 @@ from urllib.parse import urljoin
 
 logger = logging.getLogger(__name__)
 
+_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0',
+}
+
 
 class FileLionsError(Exception):
     """Base exception for FileLions resolver."""
@@ -69,12 +73,9 @@ def resolve_filelions(url: str, session: requests.Session | None = None) -> dict
     Returns: {"filename": str, "size": int, "download_url": str, "headers": dict}
     """
     sess = session or get_session()
-    sess.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0',
-    })
 
     try:
-        resp = sess.get(url, timeout=20, allow_redirects=True)
+        resp = sess.get(url, headers=_HEADERS, timeout=20, allow_redirects=True)
     except requests.RequestException as e:
         raise FileLionsError(f"Failed to fetch page: {e}") from e
 

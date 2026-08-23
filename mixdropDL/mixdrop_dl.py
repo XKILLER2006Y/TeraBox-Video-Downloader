@@ -17,6 +17,11 @@ from urllib.parse import urljoin
 
 logger = logging.getLogger(__name__)
 
+_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+}
+
 
 class MixDropError(Exception):
     """Base exception for MixDrop resolver."""
@@ -96,10 +101,6 @@ def resolve_mixdrop(url: str, session: requests.Session | None = None) -> dict:
     Returns: {"filename": str, "size": int, "download_url": str, "headers": dict}
     """
     sess = session or get_session()
-    sess.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-    })
 
     # Normalize URL
     if not _MIXDROP_RE.search(url):
@@ -109,7 +110,7 @@ def resolve_mixdrop(url: str, session: requests.Session | None = None) -> dict:
             url = url.rstrip('/') + '/' + m.group(1)
 
     try:
-        resp = sess.get(url, timeout=20, allow_redirects=True)
+        resp = sess.get(url, headers=_HEADERS, timeout=20, allow_redirects=True)
     except requests.RequestException as e:
         raise MixDropError(f"Failed to fetch page: {e}") from e
 

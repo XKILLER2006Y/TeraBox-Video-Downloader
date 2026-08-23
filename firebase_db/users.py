@@ -35,10 +35,20 @@ MODE = Literal["get", "exp", "exphd", "dw"]
 # ── In-memory cache (reduces Firestore reads) ──────────────────────────────────
 # Structure: { str(chat_id): {"username": ..., "last_active": float, "mode": ...} }
 # Populated on first read; kept in sync on every write.
+# Capped at 1000 entries — evicts oldest by last_active when full.
 _USERS_CACHE: dict[str, dict] = {}
+_USERS_CACHE_MAX = 1000
 
 _USERS_COLLECTION = "users"
 _WRITE_DEBOUNCE_SECONDS = 900  # 15 minutes — same throttle as the old Gist impl
+
+
+def _evict_if_needed():
+    """Evict oldest entry by last_active if cache exceeds max size."""
+    if len(_USERS_CACHE) <= _USERS_CACHE_MAX:
+        return
+    oldest_uid = min(_USERS_CACHE, key=lambda k: _USERS_CACHE[k].get("last_active", 0))
+    del _USERS_CACHE[oldest_uid]
 
 
 # ── Public API ─────────────────────────────────────────────────────────────────
@@ -82,6 +92,7 @@ def track_user(chat_id: int, username: str | None) -> None:
                 # Update only last_active for returning user
                 ref.update({"last_active": current_time})
                 _USERS_CACHE[uid] = {**existing, "last_active": current_time}
+                _evict_if_needed()
                 log.debug(f"Updated last_active for existing user {uid} ({username})")
                 return
             else:
@@ -93,12 +104,14 @@ def track_user(chat_id: int, username: str | None) -> None:
                 }
                 ref.set(user_data)
                 _USERS_CACHE[uid] = user_data
+                _evict_if_needed()
                 log.info(f"Registered new user {uid} ({username})")
                 return
 
         # Returning user past debounce window — partial update
         ref.update({"last_active": current_time})
         _USERS_CACHE[uid]["last_active"] = current_time
+        _evict_if_needed()
         log.debug(f"Refreshed last_active for user {uid}")
 
     except Exception as e:
@@ -125,6 +138,7 @@ def get_user_mode(chat_id: int) -> MODE:
         if snap.exists:
             data = snap.to_dict()
             _USERS_CACHE[uid] = data
+            _evict_if_needed()
             return data.get("mode", "exp")
     except Exception as e:
         log.error(f"[DB] get_user_mode failed for uid={uid}: {e}")
@@ -151,6 +165,7 @@ def set_user_mode(chat_id: int, mode: MODE) -> bool:
             _USERS_CACHE[uid]["mode"] = mode
         else:
             _USERS_CACHE[uid] = {"mode": mode}
+            _evict_if_needed()
         log.info(f"Set mode={mode} for user {uid}")
         return True
     except Exception as e:

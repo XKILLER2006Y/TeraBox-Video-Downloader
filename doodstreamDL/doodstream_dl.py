@@ -15,6 +15,11 @@ from network import get_session
 
 logger = logging.getLogger(__name__)
 
+_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+}
+
 
 class DoodError(Exception):
     """Base exception for Dood resolver."""
@@ -99,14 +104,10 @@ def resolve_dood(url: str, session: requests.Session | None = None) -> dict:
     Returns: {"filename": str, "size": int, "download_url": str, "headers": dict}
     """
     sess = session or get_session()
-    sess.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-    })
 
     # Get the page
     try:
-        resp = sess.get(url, timeout=20, allow_redirects=True)
+        resp = sess.get(url, headers=_HEADERS, timeout=20, allow_redirects=True)
     except requests.RequestException as e:
         raise DoodError(f"Failed to fetch page: {e}") from e
 
@@ -144,8 +145,8 @@ def resolve_dood(url: str, session: requests.Session | None = None) -> dict:
     # Fetch the pass URL (returns redirect or the download URL)
     try:
         pass_resp = sess.get(pass_url, timeout=15, headers={
+            **_HEADERS,
             'Referer': url,
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131',
         })
 
         if pass_resp.status_code == 200:

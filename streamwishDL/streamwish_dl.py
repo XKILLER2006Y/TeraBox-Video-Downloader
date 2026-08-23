@@ -16,6 +16,11 @@ from urllib.parse import urljoin
 
 logger = logging.getLogger(__name__)
 
+_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+}
+
 
 class StreamWishError(Exception):
     """Base exception for StreamWish resolver."""
@@ -77,13 +82,9 @@ def resolve_streamwish(url: str, session: requests.Session | None = None) -> dic
     Returns: {"filename": str, "size": int, "download_url": str, "headers": dict}
     """
     sess = session or get_session()
-    sess.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-    })
 
     try:
-        resp = sess.get(url, timeout=20, allow_redirects=True)
+        resp = sess.get(url, headers=_HEADERS, timeout=20, allow_redirects=True)
     except requests.RequestException as e:
         raise StreamWishError(f"Failed to fetch page: {e}") from e
 
@@ -112,7 +113,7 @@ def resolve_streamwish(url: str, session: requests.Session | None = None) -> dic
             base = f"{parsed.scheme}://{parsed.netloc}"
             pass_url = f"{base}/pass_md5/{pass_m.group(1)}?token={token_m.group(1)}"
             try:
-                pass_resp = sess.get(pass_url, timeout=15, headers={'Referer': resp.url})
+                pass_resp = sess.get(pass_url, timeout=15, headers={**_HEADERS, 'Referer': resp.url})
                 dl_url = pass_resp.text.strip() if pass_resp.status_code == 200 else pass_resp.headers.get('Location', '')
                 if dl_url:
                     if 'token=' not in dl_url:

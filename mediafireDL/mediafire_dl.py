@@ -15,6 +15,11 @@ from network import get_session
 
 logger = logging.getLogger(__name__)
 
+_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+}
+
 
 class MediaFireError(Exception):
     """Base exception for MediaFire resolver."""
@@ -59,13 +64,9 @@ def resolve_mediafire(url: str, session: requests.Session | None = None) -> dict
     Returns: {"filename": str, "size": int, "download_url": str}
     """
     sess = session or get_session()
-    sess.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-    })
 
     try:
-        resp = sess.get(url, timeout=20, allow_redirects=True)
+        resp = sess.get(url, headers=_HEADERS, timeout=20, allow_redirects=True)
     except requests.RequestException as e:
         raise MediaFireError(f"Failed to fetch page: {e}") from e
 
