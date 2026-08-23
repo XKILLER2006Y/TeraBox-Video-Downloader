@@ -73,7 +73,19 @@ async def _pre_upload_file(filepath: str, progress_cb=None):
     Upload a file to Telegram's servers and return a reusable InputFile handle.
     This avoids reading from disk multiple times when sending to both
     storage group and user. The handle is valid for ~24h.
+    
+    For files > 10MB, uses FastTelethon parallel uploads for better performance.
     """
+    import os
+    from .fast_upload import upload_file_fast, is_large
+    
+    file_size = os.path.getsize(filepath)
+    
+    # Use fast parallel uploads for large files
+    if is_large(file_size):
+        return await upload_file_fast(bot, filepath, progress_cb)
+    
+    # Small files use standard upload
     return await _safe_send(
         bot.upload_file,
         filepath,

@@ -49,11 +49,13 @@ def download_terabox_file_experimental(
 ) -> str:
     """
     Download the video described by download_url and filename.
-
+    
     Returns the absolute path to a local MP4 file.
     Raises TeraBoxError or CancelledError.
+    
+    Includes error handling for zero files and 0KB failures.
     """
-
+    
     safe = _safe_filename(filename)
     # Prefix with a short hash of the source URL so that two different
     # shares with identical filenames never collide on disk when processed
@@ -62,7 +64,15 @@ def download_terabox_file_experimental(
     safe = f"{url_hash}_{safe}"
     os.makedirs(STORAGE_DIR, exist_ok=True)
     mp4_path = os.path.join(STORAGE_DIR, safe if safe.lower().endswith(".mp4") else safe + ".mp4")
-   
+    
+    # Check if download URL is valid
+    if not download_url:
+        raise TeraBoxError("No download URL provided - the link may be expired or invalid")
+    
+    # Check for empty M3U8 manifests
+    if "#EXTM3U" in download_url and len(download_url.strip().split("\n")) < 3:
+        raise TeraBoxError("Empty M3U8 manifest - the video may have been removed or is no longer available")
+    
     try:
         if is_streaming_manifest(download_url):
             # Use ffmpeg-based stream downloader for HLS/DASH manifests
@@ -70,14 +80,27 @@ def download_terabox_file_experimental(
             download_from_stream_url(download_url, mp4_path, cancel_event, progress_callback)
         else:
             _download_video(download_url, mp4_path, cancel_event, progress_callback)
-
-        log.info(f"Download Completed! {mp4_path}")
+        
+        # Verify downloaded file exists and has content
+        if not os.path.exists(mp4_path):
+            raise TeraBoxError("Download completed but no file was created")
+        
+        file_size = os.path.getsize(mp4_path)
+        if file_size < 1024:
+            # File too small - likely failed
+            os.remove(mp4_path)
+            raise TeraBoxError(f"Downloaded file too small ({file_size} bytes) - the video may be corrupted or unavailable")
+        
+        log.info(f"Download Completed! {mp4_path} ({file_size / (1024*1024):.1f} MB)")
         return mp4_path
-
+        
     except Exception as e:
         log.error(f"Download failed: {e}")
         if os.path.exists(mp4_path):
-            os.remove(mp4_path)
+            try:
+                os.remove(mp4_path)
+            except OSError:
+                pass
             
         if isinstance(e, CancelledError):
             raise

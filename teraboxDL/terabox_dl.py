@@ -79,6 +79,61 @@ def _load_session(cookies_str: str = ""):
     return get_session()
 
 
+def _validate_cookies(session: requests.Session, cookies_str: str = "") -> bool:
+    """
+    Validate that cookies are still working by making a test request.
+    
+    Returns True if cookies are valid, False otherwise.
+    """
+    if not cookies_str:
+        # Try to extract from session
+        cookie_str = "; ".join(
+            f"{c.name}={c.value}" for c in session.cookies
+            if "1024tera" in (c.domain or "")
+        )
+        if not cookie_str:
+            return True  # No cookies to validate
+        cookies_str = cookie_str
+    
+    # Test request to check if cookies are valid
+    try:
+        test_url = f"{BASE_URL}/api/user/info"
+        headers = _headers(session, "", cookies_str)
+        resp = session.get(test_url, headers=headers, timeout=10)
+        
+        # Check if response indicates valid session
+        if resp.status_code == 200:
+            data = resp.json()
+            # If errno is 0, cookies are valid
+            return data.get("errno", -1) == 0
+        return False
+    except Exception as e:
+        log.warning(f"Cookie validation failed: {e}")
+        return False
+
+
+def _get_valid_cookies() -> str:
+    """
+    Get valid cookies from environment, checking all COOKIES1..N variables.
+    
+    Returns the first valid cookie string, or empty string if none found.
+    """
+    import os
+    
+    # Try COOKIES1 through COOKIES5
+    for i in range(1, 6):
+        cookies_str = os.getenv(f"COOKIES{i}", "")
+        if cookies_str:
+            session = get_session()
+            if _validate_cookies(session, cookies_str):
+                log.info(f"Using valid cookies from COOKIES{i}")
+                return cookies_str
+            else:
+                log.warning(f"COOKIES{i} is invalid or expired")
+    
+    return ""
+
+
 def _headers(session: requests.Session, surl: str = "", cookies_str: str = "") -> dict:
     hdrs = {
         "User-Agent": random.choice(USER_AGENTS),
@@ -182,8 +237,9 @@ def _discover_all_hls_chunks(session, shareid, uk, sign, timestamp, fs_id, surl,
     """
     Poll the TeraBox streaming endpoint to collect all HLS chunks,
     then build an M3U8 playlist and return it as a string (not a file).
-
+    
     Returns the M3U8 manifest text directly — avoids disk write/read.
+    Uses request collapsing to avoid duplicate requests.
     """
     quality = "M3U8_AUTO_1080"
     known = {}
@@ -192,21 +248,48 @@ def _discover_all_hls_chunks(session, shareid, uk, sign, timestamp, fs_id, surl,
     no_new_max_streak = 0
     max_retries = 100
     deadline = time.monotonic() + 120  # 2-minute hard limit
-
+    
+    # Request collapsing: cache responses to avoid duplicate requests
+    _response_cache = {}
+    _cache_ttl = 0.5  # Cache valid for 0.5 seconds
+    
     while req_count < max_retries and time.monotonic() < deadline:
         req_count += 1
         url = _build_streaming_url(shareid, uk, sign, timestamp, fs_id, quality)
-        try:
-            text = session.get(url, headers=_headers(session, surl, cookies_str), timeout=60).text.strip()
-        except Exception as e:
-            log.warning(f"HLS chunk discovery: error on request {req_count}: {e}")
-            time.sleep(0.3)
-            continue
-
+        
+        # Request collapsing: check if we recently fetched this URL
+        now = time.time()
+        cache_key = url
+        if cache_key in _response_cache:
+            cached_time, cached_text = _response_cache[cache_key]
+            if now - cached_time < _cache_ttl:
+                log.debug(f"HLS chunk discovery: using cached response for request {req_count}")
+                text = cached_text
+            else:
+                try:
+                    text = session.get(url, headers=_headers(session, surl, cookies_str), timeout=60).text.strip()
+                    _response_cache[cache_key] = (now, text)
+                except Exception as e:
+                    log.warning(f"HLS chunk discovery: error on request {req_count}: {e}")
+                    time.sleep(0.3)
+                    continue
+        else:
+            try:
+                text = session.get(url, headers=_headers(session, surl, cookies_str), timeout=60).text.strip()
+                _response_cache[cache_key] = (now, text)
+            except Exception as e:
+                log.warning(f"HLS chunk discovery: error on request {req_count}: {e}")
+                time.sleep(0.3)
+                continue
+        
+        # Clean old cache entries
+        if len(_response_cache) > 10:
+            _response_cache = {k: v for k, v in _response_cache.items() if now - v[0] < _cache_ttl}
+        
         if not text.startswith("#EXTM3U"):
             time.sleep(0.05)
             continue
-
+        
         segs = [l.strip() for l in text.split("\n") if l.strip() and not l.startswith("#")]
         for seg_url in segs:
             parsed = urlparse(seg_url)
@@ -223,32 +306,32 @@ def _discover_all_hls_chunks(session, shareid, uk, sign, timestamp, fs_id, surl,
                 p["len"] = [str(ts_size)]
                 full_url = urlunparse(parsed._replace(query=urlencode({k: v[0] for k, v in p.items()})))
                 known[chunk_idx] = (full_url, ts_size)
-
+        
         current_max = max(known.keys()) if known else -1
         if current_max > max_known_idx:
             max_known_idx = current_max
             no_new_max_streak = 0
         else:
             no_new_max_streak += 1
-
+        
         # Check if complete (contiguous range starting near 0)
         if known and min(known) <= 1 and len(known) == max(known) - min(known) + 1:
             confidence = max(10, max_known_idx)
             if no_new_max_streak >= confidence:
                 break
-
+        
         budget = min(100, max(30, max_known_idx * 3))
         if req_count >= budget:
             break
-
+    
     if not known:
         raise TeraBoxDirectError(
             "Could not discover any video chunks. "
             "The link may be expired, geo-blocked, or the video is no longer available."
         )
-
+    
     log.info(f"Discovered {len(known)}/{max_known_idx + 1} chunks in {req_count} requests")
-
+    
     # Build M3U8 playlist as string (no disk I/O)
     lines = ["#EXTM3U\n#EXT-X-VERSION:3\n"]
     for idx in sorted(known):
@@ -262,35 +345,37 @@ def _discover_all_hls_chunks(session, shareid, uk, sign, timestamp, fs_id, surl,
 def _get_video_metadata(terabox_url: str) -> dict:
     """
     Resolve TeraBox metadata directly (no proxy needed).
-
+    
     For non-HD mode: discovers all HLS chunks and returns M3U8 manifest text.
     For HD mode: returns the direct download link.
     """
     surl = _extract_surl(terabox_url)
     log.info(f"Resolving TeraBox metadata for surl={surl}")
-
+    
     session = _load_session()
-    cookies_str = os.getenv("COOKIES1", "")
-
+    
+    # Get valid cookies with auto-rotation
+    cookies_str = _get_valid_cookies()
+    
     # Step 1: Get jsToken from share page
     js_token = _get_js_token(session, surl, cookies_str)
     log.info(f"Got jsToken: {js_token[:16]}...")
-
+    
     # Step 2: Get share info (file metadata)
     info = _get_share_info(session, js_token, surl, cookies_str)
     files = info.get("list", [])
     if not files:
         raise TeraBoxDirectError("No files found in this share. The link may be expired or the files were deleted.")
-
+    
     shareid = info["shareid"]
     uk = info["uk"]
     sign = info["sign"]
     timestamp = info["timestamp"]
     fs_id = files[0]["fs_id"]
     filename = files[0].get("server_filename", "unknown")
-
+    
     log.info(f"Share: {filename} ({len(files)} file(s))")
-
+    
     # Check if file is a video before attempting HLS chunk discovery
     VIDEO_EXTS = (
         ".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm",
@@ -303,10 +388,10 @@ def _get_video_metadata(terabox_url: str) -> dict:
             f"Only video files (mp4, mkv, etc.) can be downloaded. "
             f"Non-video files like PDFs, documents, and archives are not supported."
         )
-
+    
     # Step 3: Build streaming URL and discover all HLS chunks
     m3u8_text = _discover_all_hls_chunks(session, shareid, uk, sign, timestamp, fs_id, surl, cookies_str)
-
+    
     # Return metadata with M3U8 text (no file path — avoids disk I/O)
     return {
         "list": [{
