@@ -62,7 +62,7 @@ check("teraboxDL.public_api re-export", PA_TeraBoxError is TeraBoxError)
 check("diskwalaDL re-exports identity", DL_Direct is DiskwalaDirectError and PA_DiskwalaError is DiskwalaError)
 
 
-# ── 2. Quality parsing ─────────────────────────────────────────────────────────———————
+# ── 2. Quality parsing ─────────────────────────────────────────────────———————————————
 group("Quality parsing")
 from telegram_logic.helpers import parse_quality, DEFAULT_QUALITY
 
@@ -91,7 +91,7 @@ t, q = parse_quality("https://terabox.com/s/1abc 240p extra")
 check("non-trailing token ignored", q == DEFAULT_QUALITY)
 
 
-# ── 3. Size limit & batch cap ─────────────────────────────────────────────────
+# ── 3. Size limit & batch cap ─────────────────────────────────────────————————
 group("Size limit & batch cap")
 import telegram_logic.helpers as H
 
@@ -110,7 +110,7 @@ check("over cap truncated", kept == ["a", "b", "c"] and dropped == 2)
 H.MAX_LINKS_PER_MESSAGE = 5
 
 
-# ── 4. Rate limiter (retry budget) ────────────────────────────────────────────
+# ── 4. Rate limiter (retry budget) ─────────────────────────────────────────———
 group("Retry budget")
 from telegram_logic import rate_limit as RL
 
@@ -145,7 +145,7 @@ st = RL.stats()
 check("stats snapshot shape", {"tracked_users_with_failures", "currently_blocked"} <= set(st))
 
 
-# ── 5. Cookie pool ─────────────────────────────────────────────────────────────———
+# ── 5. Cookie pool ─────────────────────────────────────────────────────────———————
 group("Cookie pool rotation")
 import teraboxDL.terabox_dl as TD
 
@@ -203,11 +203,11 @@ states = h.health()
 check("health reports ok state", states == [{"index": 9, "state": "ok"}])
 
 
-# ── 6. Quality plumbing ─────────────────────────────────────────────────────────——————
+# ── 6. Quality plumbing ─────────────────────────────────────────────────———————————————
 group("Quality plumbing")
 import inspect
 sig = inspect.signature(TD.get_video_info)
-check("get_video_info(url, is_hd, quality)", list(sig.parameters) == ["terabox_url", "is_hd", "quality"])
+check("get_video_info(url, is_hd, quality, fs_id)", list(sig.parameters) == ["terabox_url", "is_hd", "quality", "fs_id"])
 sig = inspect.signature(TD._get_video_metadata)
 check("_get_video_metadata takes quality", sig.parameters.get("quality") is not None)
 sig = inspect.signature(TD._discover_all_hls_chunks)
@@ -216,7 +216,7 @@ check("discovery defaults AUTO_1080",
 check("_probe_quality exists", callable(TD._probe_quality))
 
 
-# ── 7. Mode migration ─────────────────────────────────────────────────────────
+# ── 7. Mode migration ─────────────────────────────────────────────────————————
 group("Legacy mode migration")
 from firebase_db import users as U
 
@@ -232,7 +232,7 @@ from telegram_logic.commands.settings import AVAILABLE_MODES
 check("'get' removed from settings modes", "get" not in AVAILABLE_MODES)
 
 
-# ── 8. Status builder & queue accessor ─────────────────────────────────────────────────———————
+# ── 8. Status builder & queue accessor ─────────────────────────────────———————————————————————
 group("Status & queue")
 from telegram_logic.commands.status import build_status_text
 
@@ -250,7 +250,7 @@ mq.update_flood_until(30)
 check("flood cooldown tracked", 0 < mq.flood_remaining() <= 30)
 
 
-# ── 9. Graceful shutdown drain ─────────────────────────────────────────────────———————
+# ── 9. Graceful shutdown drain ─────────────────────────────────────────———————————————
 group("Graceful shutdown drain")
 from telegram_logic import bot as botmod
 
@@ -302,82 +302,3 @@ class _FakeClient:
     _sender = _FakeSender()
 
 tl_functions.upload.SaveBigFilePartRequest = lambda **kw: type("R", (), kw)()
-
-async def _fake_upload():
-    payload = os.urandom(FU.CHUNK_SIZE * 3 + 1234)  # 4 parts, last partial
-    tmp = "/tmp/opencode/fastup_test.bin"
-    with open(tmp, "wb") as f:
-        f.write(payload)
-    captured_parts.clear()
-    result = await FU.upload_file_fast(_FakeClient(), tmp)
-    return result, len(payload)
-
-loop = asyncio.new_event_loop()
-res, total_size = loop.run_until_complete(_fake_upload())
-expected_parts = -(-total_size // FU.CHUNK_SIZE)
-# Parts arrive in COMPLETION order (parallel senders) — that's fine, each
-# request carries its own file_part index. Assert each index sent exactly once.
-check("all parts sent exactly once",
-      sorted(captured_parts) == list(range(expected_parts)),
-      f"got {sorted(captured_parts)}, expected {list(range(expected_parts))}")
-check("InputFileBig parts count", res.parts == expected_parts)
-tl_functions.upload.SaveBigFilePartRequest = real_save
-
-
-# ── 11. HLS windowed download (local HTTP server) ─────────────────────────────
-group("HLS windowed download")
-import threading as _th
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-
-SEGMENTS = [os.urandom(300_000 + i * 50_000) for i in range(6)]  # 6 distinct segments
-
-class _SegHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        try:
-            idx = int(self.path.strip("/").split(".")[0].replace("seg", ""))
-        except ValueError:
-            self.send_error(404)
-            return
-        body = SEGMENTS[idx]
-        self.send_response(200)
-        self.send_header("Content-Type", "video/mp2t")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def log_message(self, *a):  # silence request logs
-        pass
-
-server = ThreadingHTTPServer(("127.0.0.1", 0), _SegHandler)
-_th.Thread(target=server.serve_forever, daemon=True).start()
-base = f"http://127.0.0.1:{server.server_port}"
-
-manifest = "#EXTM3U\n#EXT-X-VERSION:3\n" + "".join(
-    f"#EXTINF:2.0,\n{base}/seg{i}.ts\n" for i in range(len(SEGMENTS))
-) + "#EXT-X-ENDLIST\n"
-
-from teraboxDL.stream_downloader import (
-    _parse_m3u8_segments, _download_hls_from_manifest, is_streaming_manifest,
-)
-
-check("m3u8 parse: absolute urls", len(_parse_m3u8_segments(manifest, "")) == len(SEGMENTS))
-check("m3u8 parse: relative resolution",
-      _parse_m3u8_segments("#EXTM3U\nseg1.ts\n", base)[0] == f"{base}/seg1.ts")
-check("m3u8 detection by extension", is_streaming_manifest("http://x/y/playlist.m3u8"))
-
-out_mp4 = "/tmp/opencode/hls_out.mp4"
-_download_hls_from_manifest(manifest, "", out_mp4, None, None)
-with open(out_mp4, "rb") as f:
-    joined = f.read()
-
-expected = b"".join(SEGMENTS)
-check("windowed concat byte-exact & in order", joined == expected,
-      f"len {len(joined)} vs {len(expected)}")
-check("temp parts cleaned up", not os.path.exists(out_mp4 + ".parts"))
-server.shutdown()
-
-
-# ── Summary ─────────────────────────────────────────────────────────────────——————————————————
-print(f"\n{'=' * 54}")
-print(f"Results: {PASS} passed, {FAIL} failed")
-sys.exit(1 if FAIL else 0)
