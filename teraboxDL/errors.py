@@ -45,6 +45,18 @@ class TeraBoxRateLimited(TeraBoxDirectError):
     """
 
 
+class TeraBoxMultipleChoice(TeraBoxError):
+    """
+    Control-flow signal (not a failure): the share holds several files and
+    the caller didn't say which one it wants. Carries a brief file list for
+    the picker UI: [{"fs_id","name","size","is_video"}, ...]
+    """
+
+    def __init__(self, files: list):
+        self.files = files
+        super().__init__(f"share contains {len(files)} files")
+
+
 # ── Diskwala ───────────────────────────────────────────────────────────────────────
 
 class DiskwalaError(DownloadError):
