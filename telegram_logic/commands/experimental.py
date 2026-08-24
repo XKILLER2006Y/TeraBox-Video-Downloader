@@ -1,8 +1,8 @@
 import logging
 from telethon import events
 from ..bot import bot
-from ..helpers import extract_all_terabox_url_exp, parse_quality, cap_links
-from ..terabox_exp import process_terabox_experimental
+from ..helpers import extract_all_terabox_url_exp, parse_quality, cap_links, DEFAULT_QUALITY
+from ..terabox_exp import process_terabox_experimental, _b64d
 from diskwalaDL.public_api import extract_all_diskwala_urls
 
 _DISKWALA_HINT = (
@@ -75,3 +75,50 @@ async def cmd_get_exp_hd(event):
         await process_terabox_experimental(event, terabox_url, is_hd=True)
 
     raise events.StopPropagation
+
+
+# ── Multi-file share picker callbacks ──────────────────────────────────────────
+
+@bot.on(events.CallbackQuery(pattern=b"tpick:(.+)"))
+async def cb_tpick(event):
+    raw = event.pattern_match.group(1).decode()
+    try:
+        b64surl, fs_id_s = raw.rsplit(":", 1)
+        surl = _b64d(b64surl)
+        fs_id = int(fs_id_s)
+    except Exception:
+        await event.answer("⚠️ Invalid selection.")
+        return
+    await event.answer("Starting download…")
+    url = f"https://1024tera.com/s/1{surl}"
+    await process_terabox_experimental(event, url, quality=DEFAULT_QUALITY, fs_id=fs_id)
+
+
+@bot.on(events.CallbackQuery(pattern=b"tpickall:(.+)"))
+async def cb_tpickall(event):
+    raw = event.pattern_match.group(1).decode()
+    try:
+        surl = _b64d(raw)
+    except Exception:
+        await event.answer("⚠️ Invalid selection.")
+        return
+    await event.answer("Queuing all videos…")
+    url = f"https://1024tera.com/s/1{surl}"
+
+    # Re-resolve the listing (cheap — no chunk discovery) and queue each video
+    import asyncio
+    from teraboxDL.terabox_dl import list_share_files
+    try:
+        listing = await asyncio.to_thread(list_share_files, url)
+    except Exception as e:
+        await event.respond(f"❌ Could not re-list share: {e}")
+        return
+
+    videos = [f for f in listing.get("files", []) if f.get("is_video")]
+    if not videos:
+        await event.respond("❌ No downloadable videos found in this share.")
+        return
+
+    await event.respond(f"⬇️ Queuing **{len(videos)}** video(s)…")
+    for f in videos:
+        await process_terabox_experimental(event, url, quality=DEFAULT_QUALITY, fs_id=f["fs_id"])

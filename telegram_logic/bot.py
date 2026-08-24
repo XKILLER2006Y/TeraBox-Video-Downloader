@@ -31,6 +31,39 @@ STORAGE_GROUP_ID = env_int("STORAGE_GROUP_ID")
 # — Active-task tracking (for cancel) ————————————————————————————————————————————
 active_tasks: dict[tuple[int, str], threading.Event] = {}
 
+# — Per-user concurrency cap ———————————————————————————————————————————————————————
+# Prevents one spammy user from occupying every download slot.
+# Admins are exempt. Slots are held only while a download actually runs.
+USER_MAX_CONCURRENT = env_int("USER_MAX_CONCURRENT", 2)
+
+_user_active: dict[int, int] = {}
+_user_lock = threading.Lock()
+
+
+def acquire_user_slot(chat_id: int, is_admin: bool = False) -> bool:
+    """Try to reserve one download slot for chat_id. Admins always pass."""
+    if is_admin or USER_MAX_CONCURRENT <= 0:
+        return True
+    with _user_lock:
+        current = _user_active.get(chat_id, 0)
+        if current >= USER_MAX_CONCURRENT:
+            return False
+        _user_active[chat_id] = current + 1
+        return True
+
+
+def release_user_slot(chat_id: int, is_admin: bool = False) -> None:
+    """Return a reserved slot. Safe to call even if none was acquired."""
+    if is_admin or USER_MAX_CONCURRENT <= 0:
+        return
+    with _user_lock:
+        remaining = _user_active.get(chat_id, 0) - 1
+        if remaining <= 0:
+            _user_active.pop(chat_id, None)
+        else:
+            _user_active[chat_id] = remaining
+
+
 # — Graceful-shutdown state ———————————————————————————————————————————————————————
 # Set when the bot is shutting down: new downloads are refused, in-flight ones
 # get a grace period to finish (see main.py lifespan).
