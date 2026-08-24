@@ -1,5 +1,39 @@
+"""
+Offline unit tests — part 3 (stats, history, multi-file picker, thumbnails).
 
-# ── 14. Persistent stats ─────────────────────────────────────────────────—————
+Run: python tests/test_features2_appendix.py
+Exits 0 when all checks pass.
+"""
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+os.environ.setdefault("BOT_TOKEN", "test-token")
+os.environ.setdefault("APP_ID", "12345")
+os.environ.setdefault("API_HASH", "test-hash")
+
+import teraboxDL.terabox_dl as TD  # noqa: E402
+from teraboxDL.errors import TeraBoxError, TeraBoxDirectError  # noqa: E402
+
+PASS = 0
+FAIL = 0
+
+
+def check(name: str, cond: bool, detail: str = "") -> None:
+    global PASS, FAIL
+    if cond:
+        PASS += 1
+        print(f"  ✓ {name}")
+    else:
+        FAIL += 1
+        print(f"  ✗ {name}" + (f" — {detail}" if detail else ""))
+
+
+def group(title: str) -> None:
+    print(f"\n── {title} " + "─" * max(0, 50 - len(title)))
+
+
 group("Persistent stats")
 import firebase_db.stats as ST
 
@@ -31,7 +65,6 @@ check("failure counted on both docs", len(writes) == 2)
 check("get_stats callable", callable(ST.get_stats))
 
 
-# ── 15. Download history ─────────────────────────────────—————————————————————
 group("Download history")
 import firebase_db.users as U2
 
@@ -67,7 +100,6 @@ U2.record_history(4002, "single.mp4", "s")
 check("second user isolated", U2.get_history(4002)[0]["t"] == "single.mp4")
 
 
-# ── 16. Multi-file picker ─——————————————————————
 group("Multi-file picker")
 from teraboxDL.errors import TeraBoxMultipleChoice
 from telegram_logic.terabox_exp import _b64e, _b64d, _build_file_picker
@@ -99,7 +131,6 @@ check("get_video_info accepts fs_id", "fs_id" in sig.parameters)
 check("list_share_files exported", hasattr(TD, "list_share_files"))
 
 
-# ── 17. Thumbnail extraction ─——————————————————————
 group("Thumbnail extraction")
 _extract = TD._extract_thumb_url
 
@@ -113,7 +144,6 @@ check("missing thumbs → empty string", _extract({}, {}) == "")
 check("junk ignored safely", _extract({}, {"thumbs": {"url": [None, 42]}}) == "")
 
 
-# ── Summary ─——————————————————————
 print(f"\n{'=' * 54}")
 print(f"Results: {PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
