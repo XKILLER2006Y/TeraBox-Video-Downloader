@@ -30,38 +30,35 @@ python main.py
 ├── .env.example
 │
 ├── telegram_logic/
-│   ├── bot.py                      # Telethon client, queue, cache helpers
-│   ├── helpers.py                  # URL extractors, formatters
+│   ├── bot.py                      # Telethon client, queue, cache helpers, shutdown drain
+│   ├── helpers.py                  # URL extractors, formatters, quality/size/batch caps
 │   ├── queue.py                    # FloodWait-aware message queue
+│   ├── rate_limit.py               # Per-user retry budget (sliding window)
 │   ├── progress_callbacks.py       # Download/upload progress updaters
 │   ├── terabox_exp.py              # /exp /exphd pipeline
-│   ├── terabox_trad.py             # /get pipeline
 │   ├── diskwala.py                 # /dw pipeline
 │   └── commands/                   # Bot command handlers
-│       ├── get.py, exp.py, diskwala.py, settings.py
+│       ├── exp.py, diskwala.py, settings.py, status.py
 │       ├── broadcast.py, recent.py, cancel_download.py
-│       ├── random.py, opinion.py, start.py
+│       ├── random.py, opinion.py, start.py, universal.py
 │
 ├── teraboxDL/                      # Direct TeraBox resolver
-│   ├── terabox_dl.py               # jsToken + HLS chunk discovery
+│   ├── errors.py                   # Canonical exception hierarchy
+│   ├── terabox_dl.py               # jsToken + HLS chunk discovery + cookie rotation
 │   ├── public_api.py               # Multi-part downloader, stream support
 │   └── stream_downloader.py        # HLS/DASH segment downloader
 │
 ├── diskwalaDL/                     # Direct Diskwala resolver
+│   ├── errors.py                   # Diskwala exception types (from teraboxDL.errors base)
 │   ├── diskwala_dl.py              # Telethon Mini App auth + API
 │   └── public_api.py               # Proxy fallback wrapper
-│
-├── terabox/                        # Legacy TeraBox code (proxy-based)
-│   ├── core_pipeline.py
-│   ├── internal_helpers.py
-│   └── public_api.py
 │
 ├── firebase_db/                    # Firestore data layer
 │   ├── db.py                       # Firebase init (env-var or file)
 │   ├── cache.py                    # Video cache (surl -> msg_id)
-│   └── users.py                    # User tracking + mode prefs
+│   └── users.py                    # User tracking + mode prefs (legacy modes migrated)
 │
-├── test_e2e.py                     # End-to-end tests (20/21 passing)
+├── test_e2e.py                     # End-to-end tests
 ├── test_bot.py                     # Telegram Bot API integration test
 └── tests/                          # Additional test scripts
 ```
@@ -77,21 +74,27 @@ python main.py
 | `STORAGE_GROUP_ID` | Yes | Telegram group ID for video cache (prefix `-100`) |
 | `ADMIN_ID` | No | Telegram user ID for admin commands |
 | `FIREBASE_SECRETS` | Yes | Firebase service account JSON |
-| `COOKIES1..N` | No | TeraBox cookies (comma-separated key=value pairs) |
+| `COOKIES1..N` | No | TeraBox cookies — form a rotation pool; rate-limited cookies are auto-skipped |
 | `DISKWALA_PROXY_URL` | No | Scraper proxy endpoint |
 | `DISKWALA_API_KEY` | No | API key for the proxy |
 | `PORT` | No | FastAPI port (default: 3000) |
+| `MAX_FAILURES_PER_WINDOW` | No | Retry budget: failures allowed per window (default 5, 0 = off) |
+| `FAILURE_WINDOW_SECONDS` | No | Sliding window for failure counting (default 600) |
+| `FAILURE_COOLDOWN_SECONDS` | No | Block duration once budget exhausted (default 600) |
+| `MAX_LINKS_PER_MESSAGE` | No | Max links processed per message (default 5) |
+| `MAX_FILE_SIZE_MB` | No | Skip files larger than this (default 0 = unlimited) |
 
 ## Bot Commands
 
 | Command | Description |
 |---------|-------------|
 | `/start` | Welcome message |
-| `/exp <url>` | Download TeraBox video (experimental) |
+| `/exp <url> [quality]` | Download TeraBox video (quality: 360p/480p/720p/1080p) |
 | `/exphd <url>` | Download TeraBox HD video |
-| `/get <url>` | Download TeraBox video (legacy) |
 | `/dw <url>` | Download Diskwala video |
+| `/dl <url>` | Download from any supported host (GoFile, StreamTape, Dood, MediaFire, …) |
 | `/random` | Random video from cache |
+| `/status` | Bot health & stats (admin detail when sent by ADMIN_ID) |
 | `/settings` | View/set download mode |
 | `/op <message>` | Send feedback to admin |
 | `/recent` | [Admin] Show recent users |
@@ -101,8 +104,11 @@ python main.py
 
 - **exp** — TeraBox via direct HLS chunk discovery (default)
 - **exphd** — TeraBox direct HD (requires premium cookies)
-- **get** — TeraBox via proxy (legacy)
 - **dw** — Diskwala via Telethon Mini App or proxy
+
+> The legacy **get** mode (proxy pipeline) was removed along with the old
+> `terabox/` module. Users whose saved mode was `get` are transparently
+> migrated to `exp`.
 
 ## Adding a New Command
 

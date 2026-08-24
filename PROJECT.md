@@ -69,25 +69,32 @@
 ## Current Capabilities
 
 - [x] TeraBox direct resolution (HLS chunk discovery)
-- [x] TeraBox proxy fallback (legacy `/get` mode)
 - [x] Diskwala direct resolution (Telethon Mini App)
 - [x] Diskwala proxy fallback
+- [x] Universal downloads (`/dl` — GoFile, StreamTape, Dood, MediaFire, etc.)
 - [x] Video caching in Telegram storage group
-- [x] Firestore-backed user preferences
+- [x] Firestore-backed user preferences (legacy modes auto-migrated)
 - [x] Cancel button on downloads
 - [x] Flood-wait auto-queue
 - [x] Multi-part parallel downloads
 - [x] HLS to MP4 remuxing
 - [x] Docker deployment
 - [x] Admin commands (`/recent`, `/broadcast`)
-- [x] End-to-end tests (20/21 passing)
+- [x] Cookie rotation pool on 429/403 rate-limits
+- [x] Per-user retry budget (sliding-window failure tracking)
+- [x] `/status` health dashboard (admin detail for ADMIN_ID)
+- [x] Graceful shutdown with active-download drain
+- [x] Batch links per message (capped, sequential)
+- [x] Quality selection: `/exp <url> 720p` with auto-fallback
+- [x] Configurable file size limit (`MAX_FILE_SIZE_MB`)
+- [x] Standardized exception hierarchy (`teraboxDL/errors.py`)
 
 ## Known Issues
 
 - Session string for Telethon user account must be regenerated if Telegram session expires
-- TeraBox HD mode requires premium cookies (`COOKIES1..N`) which expire periodically
+- TeraBox HD mode (`/exphd`) requires premium direct links — currently unavailable without premium cookies
 - Single-stream fallback when server doesn't support Range requests (slower)
-- No rate limiting on per-user request frequency
+- Retry budget and rate-limit state are in-memory only (reset on restart)
 
 ## Commit History (Recent)
 

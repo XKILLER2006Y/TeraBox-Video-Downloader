@@ -20,19 +20,19 @@ Planned features and improvements for the TeraBox/Diskwala Telegram Bot.
 ## Phase 2: Reliability & Polish
 
 - [ ] **Session auto-renewal** — Detect expired Telethon sessions, prompt admin to regenerate
-- [ ] **Cookie rotation** — Automatically cycle through `COOKIES1..N` on 403/rate-limit
-- [ ] **Retry budget** — Per-user retry limits to prevent abuse
-- [ ] **Health dashboard** — `/status` command showing cache stats, active downloads, error rates
+- [x] **Cookie rotation** — Automatically cycle through `COOKIES1..N` on 403/rate-limit
+- [x] **Retry budget** — Per-user retry limits to prevent abuse (`MAX_FAILURES_PER_WINDOW`)
+- [x] **Health dashboard** — `/status` command showing cache stats, active downloads, error rates
 - [ ] **Structured logging** — JSON logs for easier debugging in production
-- [ ] **Graceful shutdown** — Finish in-progress downloads before stopping
+- [x] **Graceful shutdown** — Finish in-progress downloads before stopping (90s drain)
 
 ## Phase 3: Features
 
-- [ ] **Batch download** — Send multiple URLs in one message, process sequentially
-- [ ] **Quality selection** — `/exp 720p` or `/exp 1080p` to choose resolution
+- [x] **Batch download** — Send multiple URLs in one message, processed sequentially with a per-message cap (`MAX_LINKS_PER_MESSAGE`)
+- [x] **Quality selection** — `/exp <url> 720p` to choose resolution (360p/480p/720p/1080p, auto-fallback to best)
 - [ ] **Subtitles** — Download and attach subtitle files when available
 - [ ] **Thumbnail preview** — Show video thumbnail before download
-- [ ] **File size limit** — Warn or skip files over configurable threshold
+- [x] **File size limit** — Skip files over `MAX_FILE_SIZE_MB` (0 = unlimited)
 - [ ] **Playlist support** — Detect and download entire TeraBox folders
 - [ ] **Diskwala folder support** — Resolve folder shares (currently single-file only)
 
@@ -64,10 +64,10 @@ Planned features and improvements for the TeraBox/Diskwala Telegram Bot.
 
 ## Technical Debt
 
-- [ ] Remove legacy `terabox/` module (proxy-only, replaced by `teraboxDL/`)
-- [ ] Remove Pyrogram remnants (any leftover imports/references)
-- [ ] Standardize error types (currently `TeraBoxError`, `TeraBoxDirectError`, `DiskwalaError`, `DiskwalaDirectError`)
-- [ ] Add type hints to all functions
+- [x] Remove legacy `terabox/` module (proxy-only, replaced by `teraboxDL/`) — `/get` mode removed; users with saved mode `get` are transparently migrated to `exp`
+- [x] Remove Pyrogram remnants (any leftover imports/references)
+- [x] Standardize error types — single hierarchy in `teraboxDL/errors.py` (`DownloadError` → `TeraBoxError`/`DiskwalaError`, `CancelledError`)
+- [ ] Add type hints to all functions (core modules done: helpers, queue, progress_callbacks, network, rate_limit)
 - [ ] Increase test coverage to 90%+
 - [ ] Document all environment variables in `.env.example`
 

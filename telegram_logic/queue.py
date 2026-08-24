@@ -13,6 +13,11 @@ class MessageQueue:
         self._worker_task = None
         self._monitor_task = None
 
+    @property
+    def pending(self) -> int:
+        """Number of tasks waiting in the flood queue (0 if queue not started)."""
+        return self._queue.qsize() if self._queue is not None else 0
+
     def update_flood_until(self, seconds: int) -> None:
         """Extend the global flood-wait cooldown if needed."""
         new_until = time.monotonic() + seconds

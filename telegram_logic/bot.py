@@ -1,4 +1,5 @@
 import os
+import time
 import threading
 import asyncio
 import logging
@@ -11,7 +12,7 @@ log = logging.getLogger(__name__)
 from .queue import MessageQueue  # noqa: E402 — log setup first
 from .helpers import env_int  # noqa: E402
 
-# — Concurrency & Flood-Wait Queue ————————————————————————————————————————————
+# — Concurrency & Flood-Wait Queue ————————————————————————————————————————————————————————
 # We still need a semaphore because:
 # 1. Unbounded concurrency (e.g. 50 links) will instantly trigger FloodWait before any work gets done.
 # 2. Downloading/Uploading 50 videos concurrently will crash a low-spec VPS (OOM or CPU exhaustion).
@@ -21,7 +22,7 @@ terabox_queue = MessageQueue(concurrency_limit=10)
 async def _safe_send(*args, **kwargs):
     return await terabox_queue.safe_send(*args, **kwargs)
 
-# — Configuration —————————————————————————————————————————————————————————————
+# — Configuration —————————————————————————————————————————————————————————————————————————————
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 APP_ID = env_int("APP_ID")
 API_HASH = os.environ.get("API_HASH", "")
@@ -30,7 +31,35 @@ STORAGE_GROUP_ID = env_int("STORAGE_GROUP_ID")
 # — Active-task tracking (for cancel) ————————————————————————————————————————————
 active_tasks: dict[tuple[int, str], threading.Event] = {}
 
-# — Bot Setup ————————————————————————————————————————————————————————————— 
+# — Graceful-shutdown state ———————————————————————————————————————————————————————
+# Set when the bot is shutting down: new downloads are refused, in-flight ones
+# get a grace period to finish (see main.py lifespan).
+shutting_down = threading.Event()
+
+# Bot process start time (for /status uptime)
+START_TIME = time.time()
+
+
+async def drain_active_tasks(timeout: float = 60.0) -> int:
+    """
+    Wait for active downloads to finish during shutdown.
+
+    After half the timeout, trip every task's cancel event so stragglers abort
+    cleanly instead of being killed mid-write. Returns the number of tasks
+    that were still running when we gave up.
+    """
+    deadline = time.monotonic() + timeout
+    warned = False
+    while active_tasks and time.monotonic() < deadline:
+        if not warned and time.monotonic() > deadline - timeout / 2:
+            warned = True
+            log.info(f"Shutdown: {len(active_tasks)} download(s) still running — cancelling")
+            for ev in list(active_tasks.values()):
+                ev.set()
+        await asyncio.sleep(0.5)
+    return len(active_tasks)
+
+# — Bot Setup ————————————————————————————————————————————————————————————————————————————— 
 
 bot = TelegramClient(
     "terabox_bot",
@@ -44,7 +73,7 @@ bot = TelegramClient(
     timeout=30,
 )
 
-# — Cache helpers ——————————————————————————————————————————————————————————————
+# — Cache helpers ——————————————————————————————————————————————————————————————————————————————
 
 async def _find_cached_video(surl: str, user_mode: str):
     """
@@ -134,4 +163,3 @@ async def _cancellable(coro, cancel_event: threading.Event, poll_interval: float
             raise asyncio.CancelledError("Upload cancelled by user")
         await asyncio.sleep(poll_interval)
     return task.result()
-
