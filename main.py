@@ -12,7 +12,7 @@ import resource  # noqa: E402
 from concurrent.futures import ThreadPoolExecutor  # noqa: E402
 from contextlib import asynccontextmanager  # noqa: E402
 
-# ── CPython memory tuning (Cloud Shell: 2GB RAM) ────────────────────────────────────────────────
+# ── CPython memory tuning (Cloud Shell: 2GB RAM) ─────────────────────────────────────────———————
 # Reduce GC frequency: gen0 threshold 700→1500, gen1→15, gen2→10
 # Fewer GC pauses = better throughput during bursty download/upload cycles.
 gc.set_threshold(1500, 15, 10)
@@ -35,6 +35,8 @@ from telegram_logic.helpers import extract_all_terabox_url_exp, env_int, cap_lin
 from diskwalaDL.public_api import extract_all_diskwala_urls  # noqa: E402
 from universalDL import extract_universal_urls  # noqa: E402
 from telegram_logic.universal import process_universal  # noqa: E402
+from telegram_logic import alerts as _alerts  # noqa: E402
+from teraboxDL.terabox_dl import set_pool_exhausted_hook  # noqa: E402
 from firebase_db.users import track_user, get_user_mode  # noqa: E402
 
 # — Global User Tracker ———————————————————————————————————————————————————————————————————————————————————
@@ -193,6 +195,16 @@ async def run_bot() -> None:
     from network import prewarm_connections
     await asyncio.to_thread(prewarm_connections)
 
+    # Alerting needs the running loop; cookie-pool exhaustion DMs the admin.
+    _alerts.set_alert_loop(asyncio.get_running_loop())
+    set_pool_exhausted_hook(
+        lambda: _alerts.dispatch(
+            "🍪 TeraBox cookie pool exhausted — every configured cookie is "
+            "rate-limited or expired. Update COOKIES1..N in .env.",
+            key="cookie-pool",
+        )
+    )
+
     await bot.start(bot_token=BOT_TOKEN)
 
     # Validate the storage group is reachable — a fresh bot session cannot
@@ -217,6 +229,7 @@ async def run_bot() -> None:
         BotCommand(command="dl", description="Download from any supported host (GoFile, StreamTape, Dood, MediaFire, etc.)"),
         BotCommand(command="random", description="Get a random video"),
         BotCommand(command="status", description="Bot health & stats"),
+        BotCommand(command="history", description="Your recent downloads"),
         BotCommand(command="settings", description="View Details"),
         BotCommand(command="op", description="Send feedback to admin"),
     ]
