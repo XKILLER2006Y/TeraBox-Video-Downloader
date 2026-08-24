@@ -8,7 +8,7 @@ import requests
 from urllib.parse import unquote, urlparse, urlunparse, urlencode, parse_qs
 
 from network import get_session, USER_AGENTS
-from .errors import TeraBoxDirectError, TeraBoxRateLimited
+from .errors import TeraBoxDirectError, TeraBoxRateLimited, TeraBoxMultipleChoice
 
 log = logging.getLogger(__name__)
 
@@ -20,12 +20,14 @@ _COOKIE_CACHE_TTL = 300  # 5 minutes
 __all__ = [
     "TeraBoxDirectError",
     "TeraBoxRateLimited",
+    "TeraBoxMultipleChoice",
     "get_video_info",
+    "list_share_files",
     "cookie_pool_health",
 ]
 
 
-# ── TeraBox Error Codes ──────────────────────────────────────────────────────
+# ── TeraBox Error Codes ─────────────────────────────────────────────────────────—————
 # Maps errno values to user-friendly messages
 TERABOX_ERRNO_MAP = {
     -1: "TeraBox server error (internal). Try again later.",
@@ -54,7 +56,7 @@ def _classify_errno(errno: int) -> str:
         return f"TeraBox server error (errno={errno}). Try again later."
     return f"TeraBox error (errno={errno}). Try a different download mode."
 
-# ── Config ────────────────────────────────────────────────────────────────────
+# ── Config ─────────────────────────────────────────────────────────────────────────———
 BASE_DOMAIN = "dm.1024tera.com"
 BASE_URL = f"https://{BASE_DOMAIN}"
 
@@ -228,6 +230,44 @@ cookie_pool = _CookiePool()
 def cookie_pool_health() -> list[dict]:
     """Public accessor for /status (avoids importing the private class)."""
     return cookie_pool.health()
+
+
+# Hook fired when every configured cookie is exhausted. The app layer
+# (telegram_logic) sets this at startup to DM the admin — keeps teraboxDL
+# free of reverse imports.
+_pool_exhausted_hook = None
+
+
+def set_pool_exhausted_hook(fn) -> None:
+    global _pool_exhausted_hook
+    _pool_exhausted_hook = fn
+
+
+def _notify_pool_exhausted() -> None:
+    if _pool_exhausted_hook is not None:
+        try:
+            _pool_exhausted_hook()
+        except Exception as e:  # never let alerting break downloads
+            log.warning(f"pool_exhausted hook failed: {e}")
+
+
+def _extract_thumb_url(info: dict, file_info: dict) -> str:
+    """
+    Pull the first usable thumbnail URL from share/file metadata.
+
+    TeraBox shapes vary across API versions: thumbs may be a dict with a
+    'url' list, a bare list of strings, or absent entirely.
+    """
+    candidates = []
+    for source in (file_info.get("thumbs"), info.get("thumbs")):
+        if isinstance(source, dict):
+            candidates.extend(source.get("url") or [])
+        elif isinstance(source, list):
+            candidates.extend(source)
+    for c in candidates:
+        if isinstance(c, str) and c.startswith("http"):
+            return c
+    return ""
 
 
 def _headers(session: requests.Session, surl: str = "", cookies_str: str = "") -> dict:
@@ -467,29 +507,21 @@ def _discover_all_hls_chunks(
     return "".join(lines)
 
 
-def _get_video_metadata(terabox_url: str, quality: str = "M3U8_AUTO_1080") -> dict:
+def _resolve_share(session, surl: str) -> tuple[dict, str]:
     """
-    Resolve TeraBox metadata directly (no proxy needed).
+    Resolve jsToken + share info for a surl, rotating cookies on rate limits.
 
-    For non-HD mode: discovers all HLS chunks and returns M3U8 manifest text.
-    For HD mode: returns the direct download link (requires premium cookies).
-
-    On 429/403/rate-limit errnos, the current cookie is invalidated and the
-    next cookie in the pool is tried automatically.
+    Returns (info_dict, cookies_str_used).
+    Raises TeraBoxDirectError when nothing works.
     """
-    surl = _extract_surl(terabox_url)
-    log.info(f"Resolving TeraBox metadata for surl={surl}")
-
-    session = _load_session()
-
-    # ── Resolve jsToken + share info, rotating cookies on rate limits ──
     info = None
     rate_err: TeraBoxRateLimited | None = None
     while True:
         cookies_str = cookie_pool.acquire()
         if cookies_str is None:
-            # Every configured cookie is exhausted → surface the last rate-limit error
+            # Every configured cookie is exhausted → alert + surface error
             if rate_err is not None:
+                _notify_pool_exhausted()
                 raise TeraBoxDirectError(
                     "All TeraBox cookies are rate-limited or expired. "
                     "Try again in a few minutes or update COOKIES1..N."
@@ -499,7 +531,7 @@ def _get_video_metadata(terabox_url: str, quality: str = "M3U8_AUTO_1080") -> di
             js_token = _get_js_token(session, surl, cookies_str)
             log.info(f"Got jsToken: {js_token[:16]}...")
             info = _get_share_info(session, js_token, surl, cookies_str)
-            break
+            return info, cookies_str
         except TeraBoxRateLimited as e:
             log.warning(f"Cookie rate-limited for surl={surl}, rotating… ({e})")
             if not cookies_str:
@@ -508,11 +540,71 @@ def _get_video_metadata(terabox_url: str, quality: str = "M3U8_AUTO_1080") -> di
             rate_err = e
             continue
 
-    if info is None:
-        # No cookies configured — anonymous resolution with empty cookie header
-        js_token = _get_js_token(session, surl, "")
-        log.info(f"Got jsToken: {js_token[:16]}...")
-        info = _get_share_info(session, js_token, surl, "")
+    # No cookies configured — anonymous resolution with empty cookie header
+    js_token = _get_js_token(session, surl, "")
+    log.info(f"Got jsToken: {js_token[:16]}...")
+    info = _get_share_info(session, js_token, surl, "")
+    return info, ""
+
+
+def list_share_files(terabox_url: str) -> dict:
+    """
+    Cheap metadata-only resolution: NO chunk discovery, just the file list.
+
+    Used by the multi-file picker so users can choose a file before we pay
+    for HLS discovery. Returns:
+        {
+            "files": [ {"fs_id": int, "name": str, "size": int,
+                        "is_video": bool, "thumb_url": str}, ... ],
+        }
+    """
+    surl = _extract_surl(terabox_url)
+    session = _load_session()
+
+    info, cookies_str = _resolve_share(session, surl)
+    files = info.get("list", [])
+    if not files:
+        raise TeraBoxDirectError("No files found in this share. The link may be expired or the files were deleted.")
+
+    VIDEO_EXTS = (
+        ".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm",
+        ".m4v", ".ts", ".mpg", ".mpeg", ".3gp", ".vob", ".ogv",
+    )
+    out = []
+    for f in files[:20]:  # hard cap — buttons can't show more anyway
+        name = f.get("server_filename", "unknown")
+        ext = os.path.splitext(name)[1].lower()
+        out.append({
+            "fs_id": int(f.get("fs_id", 0)),
+            "name": name,
+            "size": int(f.get("size", 0)),
+            "is_video": (not ext) or (ext in VIDEO_EXTS),
+            "thumb_url": _extract_thumb_url(info, f),
+        })
+
+    log.info(f"Share listing: {len(out)} file(s) for surl={surl}")
+    return {"files": out}
+
+
+def _get_video_metadata(terabox_url: str, quality: str = "M3U8_AUTO_1080", fs_id: int | None = None) -> dict:
+    """
+    Resolve TeraBox metadata directly (no proxy needed).
+
+    For non-HD mode: discovers all HLS chunks and returns M3U8 manifest text.
+    For HD mode: returns the direct download link (requires premium cookies).
+
+    On 429/403/rate-limit errnos, the current cookie is invalidated and the
+    next cookie in the pool is tried automatically.
+
+    fs_id: pick a specific file from a multi-file share (default: first).
+    """
+    surl = _extract_surl(terabox_url)
+    log.info(f"Resolving TeraBox metadata for surl={surl}")
+
+    session = _load_session()
+
+    # ── Resolve jsToken + share info, rotating cookies on rate limits ──
+    info, cookies_str = _resolve_share(session, surl)
 
     files = info.get("list", [])
     if not files:
@@ -522,8 +614,35 @@ def _get_video_metadata(terabox_url: str, quality: str = "M3U8_AUTO_1080") -> di
     uk = info["uk"]
     sign = info["sign"]
     timestamp = info["timestamp"]
-    fs_id = files[0]["fs_id"]
-    filename = files[0].get("server_filename", "unknown")
+
+    # ── Multi-file share without explicit choice → hand the list to the UI ──
+    if fs_id is None and len(files) > 1:
+        VIDEO_EXTS_MC = (
+            ".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm",
+            ".m4v", ".ts", ".mpg", ".mpeg", ".3gp", ".vob", ".ogv",
+        )
+        brief = []
+        for f in files[:20]:
+            name = f.get("server_filename", "unknown")
+            ext = os.path.splitext(name)[1].lower()
+            brief.append({
+                "fs_id": int(f.get("fs_id", 0)),
+                "name": name,
+                "size": int(f.get("size", 0)),
+                "is_video": (not ext) or (ext in VIDEO_EXTS_MC),
+            })
+        raise TeraBoxMultipleChoice(brief)
+
+    # ── Select requested file (or first) ──
+    chosen = files[0]
+    if fs_id is not None:
+        match = next((f for f in files if int(f.get("fs_id", -1)) == int(fs_id)), None)
+        if match is None:
+            raise TeraBoxDirectError("Selected file is no longer available in this share.")
+        chosen = match
+
+    fs_id_val = chosen["fs_id"]
+    filename = chosen.get("server_filename", "unknown")
 
     log.info(f"Share: {filename} ({len(files)} file(s))")
 
@@ -547,21 +666,21 @@ def _get_video_metadata(terabox_url: str, quality: str = "M3U8_AUTO_1080") -> di
     # budget (100 requests / 2 min) on a dead quality.
     quality_to_use = quality
     if quality != "M3U8_AUTO_1080" and not _probe_quality(
-        session, shareid, uk, sign, timestamp, fs_id, surl, cookies_str or "", quality
+        session, shareid, uk, sign, timestamp, fs_id_val, surl, cookies_str or "", quality
     ):
         log.warning(f"Quality {quality} probe failed for surl={surl} — using AUTO_1080")
         quality_to_use = "M3U8_AUTO_1080"
 
     try:
         m3u8_text = _discover_all_hls_chunks(
-            session, shareid, uk, sign, timestamp, fs_id, surl,
+            session, shareid, uk, sign, timestamp, fs_id_val, surl,
             cookies_str or "", quality=quality_to_use,
         )
     except TeraBoxDirectError:
         if quality_to_use != "M3U8_AUTO_1080":
             log.warning(f"Quality {quality_to_use} unavailable for surl={surl} — falling back to AUTO_1080")
             m3u8_text = _discover_all_hls_chunks(
-                session, shareid, uk, sign, timestamp, fs_id, surl,
+                session, shareid, uk, sign, timestamp, fs_id_val, surl,
                 cookies_str or "", quality="M3U8_AUTO_1080",
             )
         else:
@@ -570,10 +689,12 @@ def _get_video_metadata(terabox_url: str, quality: str = "M3U8_AUTO_1080") -> di
     # Return metadata with M3U8 text (no file path — avoids disk I/O)
     return {
         "list": [{
-            "server_filename": files[0].get("server_filename", "video.mp4"),
-            "size": int(files[0].get("size", 0)),
+            "fs_id": int(fs_id_val),
+            "server_filename": chosen.get("server_filename", "video.mp4"),
+            "size": int(chosen.get("size", 0)),
             "stream_url": m3u8_text,  # M3U8 manifest text (not a file path)
             "direct_link": "",  # HD direct link (not available without premium)
+            "thumb_url": _extract_thumb_url(info, chosen),
         }]
     }
 
@@ -597,11 +718,13 @@ def _get_file_size_bytes(stream_download_url: str) -> int:
 
 #!--------PUBLIC API------------
 
-def get_video_info(terabox_url: str, is_hd: bool, quality: str = "M3U8_AUTO_1080") -> dict:
+def get_video_info(terabox_url: str, is_hd: bool, quality: str = "M3U8_AUTO_1080", fs_id: int | None = None) -> dict:
     try:
-        data = _get_video_metadata(terabox_url, quality=quality)
+        data = _get_video_metadata(terabox_url, quality=quality, fs_id=fs_id)
     except TeraBoxDirectError:
         raise  # already has user-friendly message
+    except TeraBoxMultipleChoice:
+        raise  # control-flow signal for the picker UI — pass through untouched
     except requests.ConnectionError:
         raise TeraBoxDirectError("Cannot reach TeraBox servers. Check your internet connection.")
     except requests.Timeout:
@@ -625,6 +748,8 @@ def get_video_info(terabox_url: str, is_hd: bool, quality: str = "M3U8_AUTO_1080
             "filename": file_info.get("server_filename", "unknown"),
             "size": int(file_info.get("size", 0)),
             "download_url": direct_link,
+            "fs_id": int(file_info.get("fs_id", 0)),
+            "thumb_url": file_info.get("thumb_url", ""),
         }
     else:
         download_url = file_info.get("stream_url", "")
@@ -640,6 +765,8 @@ def get_video_info(terabox_url: str, is_hd: bool, quality: str = "M3U8_AUTO_1080
             "filename": file_info.get("server_filename", "unknown"),
             "size": file_size,
             "download_url": download_url,
+            "fs_id": int(file_info.get("fs_id", 0)),
+            "thumb_url": file_info.get("thumb_url", ""),
         }
     
 # if __name__ == "__main__":
