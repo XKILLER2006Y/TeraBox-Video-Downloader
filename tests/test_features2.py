@@ -1,6 +1,5 @@
 """
-Offline unit tests — part 2 (HLS downloader, alerts, slots, stats,
-history, multi-file picker, thumbnails).
+Offline unit tests — part 2 (HLS downloader, alerts, per-user slots).
 
 Run: python tests/test_features2.py
 Exits 0 when all checks pass.
@@ -14,9 +13,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("BOT_TOKEN", "test-token")
 os.environ.setdefault("APP_ID", "12345")
 os.environ.setdefault("API_HASH", "test-hash")
-
-import teraboxDL.terabox_dl as TD  # noqa: E402
-from teraboxDL.errors import TeraBoxError, TeraBoxDirectError  # noqa: E402
 
 PASS = 0
 FAIL = 0
@@ -41,7 +37,7 @@ group("HLS windowed download")
 import threading as _th
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-SEGMENTS = [os.urandom(300_000 + i * 50_000) for i in range(6)]  # 6 distinct segments
+SEGMENTS = [os.urandom(300_000 + i * 50_000) for i in range(6)]
 
 class _SegHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -57,7 +53,7 @@ class _SegHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def log_message(self, *a):  # silence request logs
+    def log_message(self, *a):
         pass
 
 server = ThreadingHTTPServer(("127.0.0.1", 0), _SegHandler)
@@ -139,3 +135,8 @@ release_user_slot(3002)
 release_user_slot(3002)
 check("over-release is safe", 3002 not in _user_active)
 _user_active.clear()
+
+
+print(f"\n{'=' * 54}")
+print(f"Results: {PASS} passed, {FAIL} failed")
+sys.exit(1 if FAIL else 0)
