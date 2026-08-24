@@ -8,6 +8,7 @@ import requests
 from urllib.parse import unquote, urlparse, urlunparse, urlencode, parse_qs
 
 from network import get_session, USER_AGENTS
+from .errors import TeraBoxDirectError, TeraBoxRateLimited
 
 log = logging.getLogger(__name__)
 
@@ -16,10 +17,12 @@ _cookie_cache: dict = {}  # cookies_str -> (is_valid, expiry)
 _cookie_cache_lock = threading.Lock()
 _COOKIE_CACHE_TTL = 300  # 5 minutes
 
-
-class TeraBoxDirectError(Exception):
-    """Raised when TeraBox direct resolution fails with a known error."""
-    pass
+__all__ = [
+    "TeraBoxDirectError",
+    "TeraBoxRateLimited",
+    "get_video_info",
+    "cookie_pool_health",
+]
 
 
 # ── TeraBox Error Codes ──────────────────────────────────────────────────────
@@ -78,11 +81,15 @@ def _load_session(cookies_str: str = ""):
     return get_session()
 
 
-def _validate_cookies(session: requests.Session, cookies_str: str = "") -> bool:
+def _validate_cookies(session: requests.Session, cookies_str: str = "") -> str:
     """
     Validate that cookies are still working by making a test request.
-    
-    Returns True if cookies are valid, False otherwise.
+
+    Returns:
+        "valid"   — TeraBox confirmed the session works
+        "invalid" — TeraBox answered and rejected the session
+        "unknown" — network/API error; treat the cookie as usable (fail-open)
+                    so a transient blip doesn't poison the whole pool
     """
     if not cookies_str:
         # Try to extract from session
@@ -91,65 +98,136 @@ def _validate_cookies(session: requests.Session, cookies_str: str = "") -> bool:
             if "1024tera" in (c.domain or "")
         )
         if not cookie_str:
-            return True  # No cookies to validate
+            return "valid"  # No cookies to validate
         cookies_str = cookie_str
-    
+
     # Test request to check if cookies are valid
     try:
         test_url = f"{BASE_URL}/api/user/info"
         headers = _headers(session, "", cookies_str)
         resp = session.get(test_url, headers=headers, timeout=10)
-        
+
         # Check if response indicates valid session
         if resp.status_code == 200:
-            data = resp.json()
-            # If errno is 0, cookies are valid
-            return data.get("errno", -1) == 0
-        return False
+            try:
+                data = resp.json()
+                # If errno is 0, cookies are valid
+                return "valid" if data.get("errno", -1) == 0 else "invalid"
+            except ValueError:
+                return "unknown"
+        if resp.status_code >= 500:
+            return "unknown"  # server-side issue, not the cookie's fault
+        return "invalid"
     except Exception as e:
-        log.warning(f"Cookie validation failed: {e}")
-        return False
+        log.warning(f"Cookie validation error (fail-open): {e}")
+        return "unknown"
 
 
-def _get_valid_cookies() -> str:
+class _CookiePool:
     """
-    Get valid cookies from environment, checking all COOKIES1..N variables.
-    Caches validation results for 5 minutes to avoid repeated test requests.
-    Returns the first valid cookie string, or empty string if none found.
+    Round-robin pool over COOKIES1..N with validity caching and
+    rate-limit invalidation.
+
+    - `acquire()` returns the next cookie string ("" when none are configured,
+      None when all configured cookies have been exhausted this cycle).
+    - `mark_rate_limited()` invalidates a cookie immediately and advances the
+      pointer so the next acquire() skips it.
+    - Validity results (from _validate_cookies) are cached for 5 minutes.
     """
-    now = time.time()
-    
-    # Try COOKIES1 through COOKIES5
-    for i in range(1, 6):
-        cookies_str = os.getenv(f"COOKIES{i}", "")
-        if not cookies_str:
-            continue
-        
-        # Check cache first
+
+    def __init__(self, max_cookies: int = 10) -> None:
+        self._cookies: list[tuple[int, str]] = []   # [(index, cookies_str)]
+        self._pointer = 0
+        self._lock = threading.Lock()
+        for i in range(1, max_cookies + 1):
+            c = os.getenv(f"COOKIES{i}", "")
+            if c:
+                self._cookies.append((i, c))
+
+    def __len__(self) -> int:
+        return len(self._cookies)
+
+    def _is_cached_valid(self, cookies_str: str) -> bool | None:
+        """True/False if a fresh validation result exists, else None."""
+        now = time.time()
         with _cookie_cache_lock:
             cached = _cookie_cache.get(cookies_str)
             if cached and cached[1] > now:
-                if cached[0]:
-                    log.info(f"Using cached valid cookies from COOKIES{i}")
-                    return cookies_str
-                else:
-                    continue  # Cached as invalid, skip
-        
-        # Validate
-        session = get_session()
-        is_valid = _validate_cookies(session, cookies_str)
-        
-        # Cache result
+                return cached[0]
+        return None
+
+    def _cache_validity(self, cookies_str: str, is_valid: bool) -> None:
         with _cookie_cache_lock:
-            _cookie_cache[cookies_str] = (is_valid, now + _COOKIE_CACHE_TTL)
-        
-        if is_valid:
-            log.info(f"Using valid cookies from COOKIES{i}")
+            _cookie_cache[cookies_str] = (is_valid, time.time() + _COOKIE_CACHE_TTL)
+
+    def invalidate(self, cookies_str: str) -> None:
+        """Mark a cookie invalid (rate-limited/expired) and skip it next time."""
+        with _cookie_cache_lock:
+            _cookie_cache[cookies_str] = (False, time.time() + _COOKIE_CACHE_TTL)
+
+    def acquire(self) -> str | None:
+        """
+        Return the next usable cookie string.
+
+        Returns:
+            ""    — no cookies configured at all (anonymous mode)
+            str   — a cookie string to try
+            None  — all configured cookies are currently unusable
+
+        Locking note: self._lock is only held for pointer bookkeeping.
+        Live validation happens OUTSIDE the lock — it's a network call
+        (up to 10s) and holding the lock there would serialize every
+        concurrent download behind one HTTP request.
+        """
+        if not self._cookies:
+            return ""
+        n = len(self._cookies)
+        for _ in range(n):
+            with self._lock:
+                idx, cookies_str = self._cookies[self._pointer % n]
+                self._pointer = (self._pointer + 1) % n
+            cached = self._is_cached_valid(cookies_str)
+            if cached is True:
+                return cookies_str
+            if cached is False:
+                continue  # known-bad → skip
+            # Not cached → validate live once (outside the lock!)
+            verdict = _validate_cookies(get_session(), cookies_str)
+            if verdict == "valid":
+                self._cache_validity(cookies_str, True)
+                log.info(f"Using valid cookies from COOKIES{idx}")
+                return cookies_str
+            if verdict == "invalid":
+                self._cache_validity(cookies_str, False)
+                log.warning(f"COOKIES{idx} is invalid or expired")
+                continue
+            # "unknown" (network blip) → don't cache, fail open and use it
+            log.warning(f"COOKIES{idx} validation inconclusive — using anyway")
             return cookies_str
-        else:
-            log.warning(f"COOKIES{i} is invalid or expired")
-    
-    return ""
+        return None
+
+    def health(self) -> list[dict]:
+        """Per-cookie health snapshot for /status."""
+        out = []
+        now = time.time()
+        for idx, cookies_str in self._cookies:
+            with _cookie_cache_lock:
+                cached = _cookie_cache.get(cookies_str)
+            if cached and cached[1] > now:
+                state = "ok" if cached[0] else "bad"
+            else:
+                state = "unknown"
+            out.append({"index": idx, "state": state})
+        return out
+
+
+# Module-level singleton — resolvers and /status share one pool.
+cookie_pool = _CookiePool()
+
+
+def cookie_pool_health() -> list[dict]:
+    """Public accessor for /status (avoids importing the private class)."""
+    return cookie_pool.health()
 
 
 def _headers(session: requests.Session, surl: str = "", cookies_str: str = "") -> dict:
@@ -215,13 +293,13 @@ def _get_share_info(session: requests.Session, js_token: str, surl: str, cookies
     except requests.RequestException as e:
         raise TeraBoxDirectError(f"Network error while fetching metadata: {e}")
 
-    # Rate limit detection (HTTP 429)
+    # Rate limit detection (HTTP 429) — triggers cookie rotation upstream
     if resp.status_code == 429:
-        raise TeraBoxDirectError("Rate limited by TeraBox. Wait a few minutes and try again.")
+        raise TeraBoxRateLimited("Rate limited by TeraBox. Wait a few minutes and try again.")
 
-    # Geo-block detection (HTTP 403)
+    # Geo-block / cookie-level 403 — rotating cookies can help here too
     if resp.status_code == 403:
-        raise TeraBoxDirectError("Access denied by TeraBox. This content may be geo-blocked in your region.")
+        raise TeraBoxRateLimited("Access denied by TeraBox. This content may be geo-blocked in your region.")
 
     # Server error
     if resp.status_code >= 500:
@@ -234,6 +312,9 @@ def _get_share_info(session: requests.Session, js_token: str, surl: str, cookies
 
     errno = data.get("errno", 0)
     if errno != 0:
+        if errno == -10:
+            # Rate limited by TeraBox → rotate cookies upstream
+            raise TeraBoxRateLimited(_classify_errno(errno))
         msg = _classify_errno(errno)
         raise TeraBoxDirectError(msg)
 
@@ -251,15 +332,41 @@ def _build_streaming_url(shareid, uk, sign, timestamp, fs_id, quality: str) -> s
     })
 
 
-def _discover_all_hls_chunks(session, shareid, uk, sign, timestamp, fs_id, surl, cookies_str="") -> str:
+def _probe_quality(session, shareid, uk, sign, timestamp, fs_id, surl, cookies_str: str, quality: str) -> bool:
+    """
+    Single cheap request to check whether a quality tier is available.
+
+    Without this probe, an unavailable requested quality would burn the
+    entire discovery budget (up to 100 requests / 2 min) before the
+    AUTO_1080 fallback kicked in.
+    """
+    try:
+        url = _build_streaming_url(shareid, uk, sign, timestamp, fs_id, quality)
+        text = session.get(url, headers=_headers(session, surl, cookies_str), timeout=15).text.strip()
+        return text.startswith("#EXTM3U")
+    except Exception as e:
+        log.warning(f"Quality probe {quality} failed (will still attempt discovery): {e}")
+        return False
+
+
+def _discover_all_hls_chunks(
+    session,
+    shareid,
+    uk,
+    sign,
+    timestamp,
+    fs_id,
+    surl,
+    cookies_str="",
+    quality: str = "M3U8_AUTO_1080",
+) -> str:
     """
     Poll the TeraBox streaming endpoint to collect all HLS chunks,
     then build an M3U8 playlist and return it as a string (not a file).
-    
+
     Returns the M3U8 manifest text directly — avoids disk write/read.
     Uses request collapsing to avoid duplicate requests.
     """
-    quality = "M3U8_AUTO_1080"
     known = {}
     req_count = 0
     max_known_idx = -1
@@ -360,40 +467,66 @@ def _discover_all_hls_chunks(session, shareid, uk, sign, timestamp, fs_id, surl,
     return "".join(lines)
 
 
-def _get_video_metadata(terabox_url: str) -> dict:
+def _get_video_metadata(terabox_url: str, quality: str = "M3U8_AUTO_1080") -> dict:
     """
     Resolve TeraBox metadata directly (no proxy needed).
-    
+
     For non-HD mode: discovers all HLS chunks and returns M3U8 manifest text.
-    For HD mode: returns the direct download link.
+    For HD mode: returns the direct download link (requires premium cookies).
+
+    On 429/403/rate-limit errnos, the current cookie is invalidated and the
+    next cookie in the pool is tried automatically.
     """
     surl = _extract_surl(terabox_url)
     log.info(f"Resolving TeraBox metadata for surl={surl}")
-    
+
     session = _load_session()
-    
-    # Get valid cookies with auto-rotation
-    cookies_str = _get_valid_cookies()
-    
-    # Step 1: Get jsToken from share page
-    js_token = _get_js_token(session, surl, cookies_str)
-    log.info(f"Got jsToken: {js_token[:16]}...")
-    
-    # Step 2: Get share info (file metadata)
-    info = _get_share_info(session, js_token, surl, cookies_str)
+
+    # ── Resolve jsToken + share info, rotating cookies on rate limits ──
+    info = None
+    rate_err: TeraBoxRateLimited | None = None
+    while True:
+        cookies_str = cookie_pool.acquire()
+        if cookies_str is None:
+            # Every configured cookie is exhausted → surface the last rate-limit error
+            if rate_err is not None:
+                raise TeraBoxDirectError(
+                    "All TeraBox cookies are rate-limited or expired. "
+                    "Try again in a few minutes or update COOKIES1..N."
+                )
+            break
+        try:
+            js_token = _get_js_token(session, surl, cookies_str)
+            log.info(f"Got jsToken: {js_token[:16]}...")
+            info = _get_share_info(session, js_token, surl, cookies_str)
+            break
+        except TeraBoxRateLimited as e:
+            log.warning(f"Cookie rate-limited for surl={surl}, rotating… ({e})")
+            if not cookies_str:
+                raise  # anonymous mode — nothing to rotate
+            cookie_pool.invalidate(cookies_str)
+            rate_err = e
+            continue
+
+    if info is None:
+        # No cookies configured — anonymous resolution with empty cookie header
+        js_token = _get_js_token(session, surl, "")
+        log.info(f"Got jsToken: {js_token[:16]}...")
+        info = _get_share_info(session, js_token, surl, "")
+
     files = info.get("list", [])
     if not files:
         raise TeraBoxDirectError("No files found in this share. The link may be expired or the files were deleted.")
-    
+
     shareid = info["shareid"]
     uk = info["uk"]
     sign = info["sign"]
     timestamp = info["timestamp"]
     fs_id = files[0]["fs_id"]
     filename = files[0].get("server_filename", "unknown")
-    
+
     log.info(f"Share: {filename} ({len(files)} file(s))")
-    
+
     # Check if file is a video before attempting HLS chunk discovery
     VIDEO_EXTS = (
         ".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm",
@@ -406,10 +539,34 @@ def _get_video_metadata(terabox_url: str) -> dict:
             f"Only video files (mp4, mkv, etc.) can be downloaded. "
             f"Non-video files like PDFs, documents, and archives are not supported."
         )
-    
-    # Step 3: Build streaming URL and discover all HLS chunks
-    m3u8_text = _discover_all_hls_chunks(session, shareid, uk, sign, timestamp, fs_id, surl, cookies_str)
-    
+
+    # Step 3: Build streaming URL and discover all HLS chunks.
+    # If the user-requested quality yields nothing, fall back to AUTO_1080 once.
+    # Cheap single-request probe: skip straight to AUTO_1080 if the
+    # requested tier isn't available, instead of burning the discovery
+    # budget (100 requests / 2 min) on a dead quality.
+    quality_to_use = quality
+    if quality != "M3U8_AUTO_1080" and not _probe_quality(
+        session, shareid, uk, sign, timestamp, fs_id, surl, cookies_str or "", quality
+    ):
+        log.warning(f"Quality {quality} probe failed for surl={surl} — using AUTO_1080")
+        quality_to_use = "M3U8_AUTO_1080"
+
+    try:
+        m3u8_text = _discover_all_hls_chunks(
+            session, shareid, uk, sign, timestamp, fs_id, surl,
+            cookies_str or "", quality=quality_to_use,
+        )
+    except TeraBoxDirectError:
+        if quality_to_use != "M3U8_AUTO_1080":
+            log.warning(f"Quality {quality_to_use} unavailable for surl={surl} — falling back to AUTO_1080")
+            m3u8_text = _discover_all_hls_chunks(
+                session, shareid, uk, sign, timestamp, fs_id, surl,
+                cookies_str or "", quality="M3U8_AUTO_1080",
+            )
+        else:
+            raise
+
     # Return metadata with M3U8 text (no file path — avoids disk I/O)
     return {
         "list": [{
@@ -440,9 +597,9 @@ def _get_file_size_bytes(stream_download_url: str) -> int:
 
 #!--------PUBLIC API------------
 
-def get_video_info(terabox_url: str, is_hd: bool) -> dict:
+def get_video_info(terabox_url: str, is_hd: bool, quality: str = "M3U8_AUTO_1080") -> dict:
     try:
-        data = _get_video_metadata(terabox_url)
+        data = _get_video_metadata(terabox_url, quality=quality)
     except TeraBoxDirectError:
         raise  # already has user-friendly message
     except requests.ConnectionError:
