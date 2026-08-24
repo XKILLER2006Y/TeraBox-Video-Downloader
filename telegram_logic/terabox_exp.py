@@ -1,5 +1,6 @@
 import os
 import time
+import base64
 import threading
 import asyncio
 import logging
@@ -7,15 +8,19 @@ import tempfile
 from telethon import Button
 from telethon.errors import FloodWaitError
 
-from .bot import bot, _find_cached_video, _pre_upload_file, _upload_to_storage, _cancellable, terabox_queue, _safe_send, active_tasks, STORAGE_GROUP_ID, shutting_down
-from .helpers import format_size, format_duration, extract_surl_exp, check_size_limit, DEFAULT_QUALITY
+from .bot import bot, _find_cached_video, _pre_upload_file, _upload_to_storage, _cancellable, terabox_queue, _safe_send, active_tasks, STORAGE_GROUP_ID, shutting_down, acquire_user_slot, release_user_slot, USER_MAX_CONCURRENT
+from .helpers import format_size, format_duration, extract_surl_exp, check_size_limit, DEFAULT_QUALITY, env_int
 from . import rate_limit
 from firebase_db.cache import add_to_cache
+from firebase_db.stats import record_success as stats_ok, record_failure as stats_fail
+from firebase_db.users import record_history
 from .progress_callbacks import make_download_progress_cb, make_upload_progress_cb
 
-from teraboxDL.errors import TeraBoxError, CancelledError, TeraBoxDirectError
+from teraboxDL.errors import TeraBoxError, CancelledError, TeraBoxDirectError, TeraBoxMultipleChoice
 from teraboxDL.public_api import download_terabox_file_experimental
 from teraboxDL.terabox_dl import get_video_info
+
+ADMIN_ID = env_int("ADMIN_ID")
 
 log = logging.getLogger(__name__)
 
@@ -27,6 +32,7 @@ async def process_terabox_experimental(
     terabox_url: str,
     is_hd: bool = False,
     quality: str | None = None,
+    fs_id: int | None = None,
 ) -> None:
     if shutting_down.is_set():
         await _safe_send(event.respond, "🛑 Bot is restarting — please try again in a minute.")
@@ -41,7 +47,7 @@ async def process_terabox_experimental(
     # If currently in flood cooldown → queue immediately
     rem = terabox_queue.flood_remaining()
     if rem > 0:
-        await terabox_queue.put(helper, event, terabox_url, is_hd, quality or DEFAULT_QUALITY)
+        await terabox_queue.put(helper, event, terabox_url, is_hd, quality or DEFAULT_QUALITY, fs_id)
         try:
             await event.respond(
                 "⏳ Bot overloaded! Your request has been queued "
@@ -56,11 +62,11 @@ async def process_terabox_experimental(
     # Try processing normally under the semaphore
     async with terabox_queue.semaphore:
         try:
-            await helper(event, terabox_url, is_hd, quality or DEFAULT_QUALITY)
+            await helper(event, terabox_url, is_hd, quality or DEFAULT_QUALITY, fs_id)
         except FloodWaitError as e:
             # Pipeline hit flood → set cooldown, queue, notify user
             terabox_queue.update_flood_until(e.seconds)
-            await terabox_queue.put(helper, event, terabox_url, is_hd, quality or DEFAULT_QUALITY)
+            await terabox_queue.put(helper, event, terabox_url, is_hd, quality or DEFAULT_QUALITY, fs_id)
             try:
                 await event.respond(
                     f"⏳ Bot overloaded! Your request has been queued "
@@ -70,13 +76,17 @@ async def process_terabox_experimental(
                 pass
 
 
-async def helper(event, terabox_url: str, is_hd: bool, quality: str = DEFAULT_QUALITY) -> None:
+async def helper(event, terabox_url: str, is_hd: bool, quality: str = DEFAULT_QUALITY, fs_id: int | None = None) -> None:
     """Inner pipeline, runs under the concurrency semaphore."""
     chat_id = event.chat_id
     surl = extract_surl_exp(terabox_url)
     user_mode = "exphd" if is_hd else "exp"
-    task_key = (chat_id, surl)
+    # Multi-file picks get their own cache/track key so two files from one
+    # share never collide.
+    cache_key = surl if fs_id is None else f"{surl}-{fs_id}"
+    task_key = (chat_id, cache_key)
     total_start = time.time()
+    is_admin = bool(ADMIN_ID and chat_id == ADMIN_ID)
 
     # Reject duplicate concurrent requests for the same link from this chat —
     # a second registration would orphan the first task's cancel event.
@@ -88,7 +98,13 @@ async def helper(event, terabox_url: str, is_hd: bool, quality: str = DEFAULT_QU
     cancel_event = threading.Event()
     active_tasks[task_key] = cancel_event
 
-    cancel_btn = [[Button.inline("❌ Cancel", data=f"cancel:{surl}")]]
+    if not acquire_user_slot(chat_id, is_admin):
+        await _safe_send(event.respond,
+            f"⏳ You already have **{USER_MAX_CONCURRENT}** download(s) running. "
+            "Wait for them to finish first (or they'll finish on their own).")
+        return
+
+    cancel_btn = [[Button.inline("❌ Cancel", data=f"cancel:{cache_key}")]]
 
     def _cleanup_files(*paths):
         """Remove temp/downloaded files from disk."""
@@ -101,7 +117,7 @@ async def helper(event, terabox_url: str, is_hd: bool, quality: str = DEFAULT_QU
                     log.warning(f"Could not clean up {p}: {e}")
 
     # Temp artifacts for this task: downloaded file, remux leftover, local M3U8
-    m3u8_tmp = os.path.join(tempfile.gettempdir(), f"terabox_{surl}.m3u8")
+    m3u8_tmp = os.path.join(tempfile.gettempdir(), f"terabox_{cache_key}.m3u8")
 
     def _cleanup_all(filepath=None):
         paths = [filepath, os.path.splitext(filepath)[0] + ".ts" if filepath else None,
@@ -134,15 +150,29 @@ async def helper(event, terabox_url: str, is_hd: bool, quality: str = DEFAULT_QU
 
         #! GET FILE INFO
         try:
-            info = await asyncio.to_thread(get_video_info, terabox_url, is_hd, quality)
+            info = await asyncio.to_thread(get_video_info, terabox_url, is_hd, quality, fs_id)
+        except TeraBoxMultipleChoice as mc:
+            # Multi-file share without a pick → show inline chooser
+            buttons = _build_file_picker(mc.files, surl)
+            if buttons:
+                await _safe_send(
+                    status.edit,
+                    f"📂 This share contains **{len(mc.files)}** files — pick one:",
+                    buttons=buttons,
+                )
+            else:
+                await _safe_send(status.edit, "❌ Share contains too many files to list. Ask the admin to split it.")
+            return
         except TeraBoxDirectError as e:
             log.error(f"Metadata fetch failed for surl={surl}: {e}")
             rate_limit.register_failure(chat_id)
+            stats_fail()
             await _safe_send(status.edit, f"❌ {e}\n\nYou can try different *mode* to download.\nSwitch *mode* from /settings")
             return
         except Exception as e:
             log.error(f"Metadata fetch failed for surl={surl}: {e}")
             rate_limit.register_failure(chat_id)
+            stats_fail()
             await _safe_send(status.edit, f"❌ Failed to get video info: {e}\n\nYou can try different *mode* to download.\nSwitch *mode* from /settings")
             return
 
@@ -159,6 +189,19 @@ async def helper(event, terabox_url: str, is_hd: bool, quality: str = DEFAULT_QU
                 f"📦 **{filename}**\n📐 Size: **{size_str}**\n\n{size_error}",
             )
             return
+
+        # Thumbnail preview (best-effort — never block the pipeline)
+        thumb_url = info.get("thumb_url") or ""
+        if thumb_url:
+            try:
+                await _cancellable(_safe_send(
+                    bot.send_file,
+                    chat_id, thumb_url,
+                    caption=f"🎬 **{filename}**\n📐 Size: **{size_str}**",
+                    reply_to=event.message.id,
+                ), cancel_event)
+            except Exception:
+                pass  # preview is cosmetic
 
         # Single status update — a separate "Quality:" edit would be
         # instantly overwritten and just burns an API call.
@@ -181,11 +224,13 @@ async def helper(event, terabox_url: str, is_hd: bool, quality: str = DEFAULT_QU
         except TeraBoxError as e:
             log.error(f"Download error for surl={surl}: {e}")
             rate_limit.register_failure(chat_id)
+            stats_fail()
             await _safe_send(status.edit, f"❌ Download failed: {e}\n\nYou can try different *mode* to download.\nSwitch *mode* from /settings")
             return
         except Exception as e:
             log.exception(f"Unexpected download error for surl={surl}")
             rate_limit.register_failure(chat_id)
+            stats_fail()
             await _safe_send(status.edit, f"❌ Download failed: {e}\n\nYou can try different *mode* to download.\nSwitch *mode* from /settings")
             return
         dl_time = time.time() - dl_start
@@ -313,6 +358,8 @@ async def helper(event, terabox_url: str, is_hd: bool, quality: str = DEFAULT_QU
 
         _cleanup_all(filepath)
         rate_limit.register_success(chat_id)
+        stats_ok(os.path.getsize(filepath) if filepath and os.path.exists(filepath) else 0)
+        await asyncio.to_thread(record_history, chat_id, filename, cache_key)
 
         try:
             await _safe_send(status.delete)
@@ -321,3 +368,40 @@ async def helper(event, terabox_url: str, is_hd: bool, quality: str = DEFAULT_QU
 
     finally:
         active_tasks.pop(task_key, None)
+        release_user_slot(chat_id, is_admin)
+
+
+# ── Multi-file picker ──────────────────────────────────────────────────────────
+
+_b64 = base64
+
+
+def _b64e(s: str) -> str:
+    return _b64.urlsafe_b64encode(s.encode()).decode().rstrip("=")
+
+
+def _b64d(s: str) -> str:
+    return _b64.urlsafe_b64decode(s + "=" * (-len(s) % 4)).decode()
+
+
+def _build_file_picker(files: list[dict], surl: str):
+    """Inline keyboard listing share files (max 10 videos) + Download-all."""
+    from telethon import Button
+    rows = []
+    shown = 0
+    for f in files:
+        if not f.get("is_video"):
+            continue
+        if shown >= 10:
+            break
+        data = f"tpick:{_b64e(surl)}:{f['fs_id']}".encode()
+        if len(data) > 64:
+            continue
+        label = f"🎬 {f['name'][:36]} · {format_size(f['size'])}"
+        rows.append([Button.inline(label, data=data)])
+        shown += 1
+    if shown > 1:
+        all_data = f"tpickall:{_b64e(surl)}".encode()
+        if len(all_data) <= 64:
+            rows.append([Button.inline(f"⬇️ Download all {shown} videos", data=all_data)])
+    return rows or None
