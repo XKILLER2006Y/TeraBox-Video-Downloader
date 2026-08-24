@@ -18,9 +18,11 @@ import requests
 
 from telegram_logic.bot import (
     _safe_send, STORAGE_GROUP_ID, shutting_down,
+    acquire_user_slot, release_user_slot,
 )
 from telegram_logic import rate_limit
 from telegram_logic.helpers import env_int
+from firebase_db.stats import record_success as stats_ok, record_failure as stats_fail
 from universalDL import resolve_universal, UniversalDL
 from network import get_session
 
@@ -62,6 +64,11 @@ async def process_universal(event, url: str, bot) -> None:
         await _safe_send(event.respond, blocked)
         return
 
+    # Per-user concurrency cap (admins exempt via bot.py check)
+    if not acquire_user_slot(chat_id):
+        await _safe_send(event.respond, "⏳ You already have downloads running — wait for them to finish.")
+        return
+
     # ── Duplicate rejection ───────────────────────────────────────────────────────────────
     with _lock:
         if task_key in _active_tasks and not _active_tasks[task_key].is_set():
@@ -76,13 +83,14 @@ async def process_universal(event, url: str, bot) -> None:
     try:
         # ── Phase 1: Cache lookup (placeholder for future) ────────────────────────────────
 
-        # ── Phase 2: Metadata fetch ─────────────────────────────────────────────────────────——
+        # ── Phase 2: Metadata fetch ─────────────────────────────────────────────────————————
         status_msg = await _safe_send(event.respond, "🔍 Resolving link...")
 
         try:
             info = await asyncio.to_thread(resolve_universal, url)
         except UniversalDL as e:
             rate_limit.register_failure(chat_id)
+            stats_fail()
             await _safe_send(status_msg.edit, f"❌ Resolution failed: {e}")
             return
 
@@ -111,7 +119,7 @@ async def process_universal(event, url: str, bot) -> None:
             f"📦 {filename}\n📐 Size: {size_str}\n\n⬇️ Downloading... 0%"
         )
 
-        # ── Phase 3: Download ─────────────────────────────────────────────────────────────────
+        # ── Phase 3: Download ─────────────────────────────────────────────────────────———————
         download_start = time.time()
 
         filepath = await asyncio.to_thread(
@@ -120,6 +128,7 @@ async def process_universal(event, url: str, bot) -> None:
 
         if not filepath:
             rate_limit.register_failure(chat_id)
+            stats_fail()
             await _safe_send(status_msg.edit, "❌ Download failed — no file produced.")
             return
 
@@ -132,7 +141,7 @@ async def process_universal(event, url: str, bot) -> None:
             f"📦 {filename}\n📐 Size: {actual_size / (1024*1024):.1f} MB\n\n⬆️ Uploading..."
         )
 
-        # ── Phase 4: Upload to storage group (cache for future) ─────────────────────────——
+        # ── Phase 4: Upload to storage group (cache for future) ─────────────────———————
         storage_msg = None
         if STORAGE_GROUP_ID:
             try:
@@ -145,7 +154,7 @@ async def process_universal(event, url: str, bot) -> None:
                 logger.warning(f"Storage upload failed (non-fatal): {e}")
                 storage_msg = None
 
-        # ── Phase 5: Deliver to user ─────────────────────────────────────────────────────────—
+        # ── Phase 5: Deliver to user ─────────────────────────────────────────────────—————
         if storage_msg:
             await bot.send_file(chat_id, storage_msg.media, caption=f"✅ {filename}")
         else:
@@ -156,6 +165,7 @@ async def process_universal(event, url: str, bot) -> None:
 
         await _safe_send(status_msg.edit, f"✅ {filename} — delivered!")
         rate_limit.register_success(chat_id)
+        stats_ok(actual_size)
         logger.info(f"Delivered {filename} to {chat_id} in {time.time() - download_start:.1f}s")
 
     except asyncio.CancelledError:
@@ -163,11 +173,13 @@ async def process_universal(event, url: str, bot) -> None:
     except Exception as e:
         logger.error(f"Universal DL error for {url}: {e}", exc_info=True)
         rate_limit.register_failure(chat_id)
+        stats_fail()
         if status_msg:
             await _safe_send(status_msg.edit, f"❌ Error: {e}")
     finally:
         with _lock:
             _active_tasks.pop(task_key, None)
+        release_user_slot(chat_id)
         if filepath and os.path.exists(filepath):
             await asyncio.to_thread(_cleanup_files, filepath)
 

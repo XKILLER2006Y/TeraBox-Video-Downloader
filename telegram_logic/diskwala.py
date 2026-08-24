@@ -9,11 +9,13 @@ from telethon.errors import FloodWaitError
 from .bot import (
     bot, _find_cached_video, _pre_upload_file, _upload_to_storage,
     _cancellable, terabox_queue, _safe_send, active_tasks, STORAGE_GROUP_ID,
-    shutting_down,
+    shutting_down, acquire_user_slot, release_user_slot, USER_MAX_CONCURRENT,
 )
-from .helpers import format_size, format_duration, check_size_limit
+from .helpers import format_size, format_duration, check_size_limit, env_int
 from . import rate_limit
+from . import alerts
 from firebase_db.cache import add_to_cache
+from firebase_db.stats import record_success as stats_ok, record_failure as stats_fail
 from .progress_callbacks import make_download_progress_cb, make_upload_progress_cb
 
 from teraboxDL.errors import DownloadError, CancelledError
@@ -22,6 +24,8 @@ from diskwalaDL.public_api import get_diskwala_info, extract_diskwala_id
 from diskwalaDL.errors import DiskwalaError, DiskwalaDirectError
 
 log = logging.getLogger(__name__)
+
+ADMIN_ID = env_int("ADMIN_ID")
 
 # Diskwala shares its own cache bucket / user mode.
 DW_MODE = "dw"
@@ -79,6 +83,7 @@ async def _dw_helper(event, diskwala_url: str) -> None:
     link_id = extract_diskwala_id(diskwala_url) or diskwala_url
     user_mode = DW_MODE
     task_key = (chat_id, link_id)
+    is_admin = bool(ADMIN_ID and chat_id == ADMIN_ID)
     total_start = time.time()
 
     # Reject duplicate concurrent requests for the same link from this chat —
@@ -90,6 +95,12 @@ async def _dw_helper(event, diskwala_url: str) -> None:
 
     cancel_event = threading.Event()
     active_tasks[task_key] = cancel_event
+
+    if not acquire_user_slot(chat_id, is_admin):
+        await _safe_send(event.respond,
+            f"⏳ You already have **{USER_MAX_CONCURRENT}** download(s) running. "
+            "Wait for them to finish first.")
+        return
 
     cancel_btn = [[Button.inline("❌ Cancel", data=f"cancel:{link_id}")]]
 
@@ -132,7 +143,15 @@ async def _dw_helper(event, diskwala_url: str) -> None:
             info = await asyncio.to_thread(get_diskwala_info, diskwala_url)
         except DiskwalaDirectError as e:
             log.error(f"Diskwala direct resolution failed for {link_id}: {e}")
+            msg = str(e)
+            if "auth token" in msg.lower() or "session" in msg.lower():
+                alerts.dispatch(
+                    f"⚠️ Diskwala user SESSION failing: {msg[:120]}\n"
+                    "Regenerate it or Diskwala falls back to the proxy.",
+                    key="dw-session",
+                )
             rate_limit.register_failure(chat_id)
+            stats_fail()
             await _safe_send(status.edit, f"❌ {e}")
             return
         except DiskwalaError as e:
@@ -180,11 +199,13 @@ async def _dw_helper(event, diskwala_url: str) -> None:
         except DownloadError as e:
             log.error(f"Download error for {link_id}: {e}")
             rate_limit.register_failure(chat_id)
+            stats_fail()
             await _safe_send(status.edit, f"❌ Download failed: {e}")
             return
         except Exception as e:
             log.exception(f"Unexpected download error for {link_id}")
             rate_limit.register_failure(chat_id)
+            stats_fail()
             await _safe_send(status.edit, f"❌ Download failed: {e}")
             return
         dl_time = time.time() - dl_start
@@ -319,6 +340,7 @@ async def _dw_helper(event, diskwala_url: str) -> None:
                     log.warning(f"Could not delete local file {f_path}: {e}")
 
         rate_limit.register_success(chat_id)
+        stats_ok(os.path.getsize(filepath) if filepath and os.path.exists(filepath) else 0)
 
         try:
             await _safe_send(status.delete)
@@ -327,3 +349,4 @@ async def _dw_helper(event, diskwala_url: str) -> None:
 
     finally:
         active_tasks.pop(task_key, None)
+        release_user_slot(chat_id, locals().get("is_admin", False))
