@@ -9,3 +9,7 @@ terabox_bot.session-journal
 firebase_secrets.json
 fb_secrets.json
   
+# runtime artifacts
+bot.log
+bot.log.*
+*.session

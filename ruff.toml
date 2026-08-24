@@ -14,3 +14,5 @@ ignore = [
 "firebase_db/users.py" = ["F401"]      # DELETE_FIELD kept available by contract
 # DL package re-exports
 "*DL/__init__.py" = ["F401"]
+# test scripts group imports by section, after env setup / mocks
+"tests/*.py" = ["E402", "E701"]

@@ -1,9 +1,8 @@
-import asyncio
 import logging
 from telethon import events
 from ..bot import bot
 from ..diskwala import process_diskwala
-from ..helpers import extract_all_terabox_url_exp
+from ..helpers import extract_all_terabox_url_exp, cap_links
 from diskwalaDL.public_api import extract_all_diskwala_urls
 
 log = logging.getLogger(__name__)
@@ -20,7 +19,7 @@ async def cmd_dw(event):
     if not diskwala_url_list:
         if extract_all_terabox_url_exp(arg):
             await event.respond(
-                "🔗 That looks like a **TeraBox** link. Use **/exp**, **/exphd** or **/get**:\n"
+                "🔗 That looks like a **TeraBox** link. Use **/exp** or **/exphd**:\n"
                 "`/exp <link>`\n\n"
                 "…or switch your default mode from /settings."
             )
@@ -31,6 +30,13 @@ async def cmd_dw(event):
             )
         raise events.StopPropagation
 
-    await asyncio.gather(*[process_diskwala(event, url) for url in diskwala_url_list])
+    urls, dropped = cap_links(diskwala_url_list)
+    if dropped > 0:
+        await event.respond(
+            f"⚠️ Too many links — processing the first {len(urls)}. "
+            f"Send the rest in a follow-up message."
+        )
+    for url in urls:
+        await process_diskwala(event, url)
 
     raise events.StopPropagation
