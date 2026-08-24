@@ -12,7 +12,7 @@ import resource  # noqa: E402
 from concurrent.futures import ThreadPoolExecutor  # noqa: E402
 from contextlib import asynccontextmanager  # noqa: E402
 
-# ── CPython memory tuning (Cloud Shell: 2GB RAM) ────────────────────────────────
+# ── CPython memory tuning (Cloud Shell: 2GB RAM) ────────────────────────────────────────────────
 # Reduce GC frequency: gen0 threshold 700→1500, gen1→15, gen2→10
 # Fewer GC pauses = better throughput during bursty download/upload cycles.
 gc.set_threshold(1500, 15, 10)
@@ -27,17 +27,17 @@ import uvicorn  # noqa: E402
 from telethon import events  # noqa: E402
 from telethon.tl.functions.bots import SetBotCommandsRequest  # noqa: E402
 from telethon.tl.types import BotCommand, BotCommandScopeDefault, BotCommandScopePeer  # noqa: E402
+import telegram_logic.bot as telegram_logic_bot  # noqa: E402
 from telegram_logic.bot import bot  # noqa: E402
-from telegram_logic.terabox_trad import process_terabox  # noqa: E402
 from telegram_logic.terabox_exp import process_terabox_experimental  # noqa: E402
 from telegram_logic.diskwala import process_diskwala  # noqa: E402
-from telegram_logic.helpers import extract_all_surls, extract_all_terabox_url_exp, env_int  # noqa: E402
+from telegram_logic.helpers import extract_all_terabox_url_exp, env_int, cap_links  # noqa: E402
 from diskwalaDL.public_api import extract_all_diskwala_urls  # noqa: E402
 from universalDL import extract_universal_urls  # noqa: E402
 from telegram_logic.universal import process_universal  # noqa: E402
 from firebase_db.users import track_user, get_user_mode  # noqa: E402
 
-# — Global User Tracker ——————————————————————————————————————————————————————————————————
+# — Global User Tracker ———————————————————————————————————————————————————————————————————————————————————
 
 @bot.on(events.NewMessage)
 async def global_tracker(event):
@@ -91,11 +91,27 @@ DISKWALA_IN_TERABOX_MODE = (
 
 TERABOX_IN_DISKWALA_MODE = (
     "🔗 That looks like a **TeraBox** link, but your current mode is **dw** (Diskwala).\n\n"
-    "➡️ Use **/exp**, **/exphd** or **/get**:\n`/exp <link>`\n\n"
+    "➡️ Use **/exp** or **/exphd**:\n`/exp <link>`\n\n"
     "…or switch your default mode from /settings."
 )
 
-# — Basic Message Handler ————————————————————————————————————————————————————————————————————
+
+async def _run_batch(event, urls: list[str], processor) -> None:
+    """
+    Process a batch of links sequentially (gentle on Telegram and upstream),
+    with a per-message cap to prevent abuse.
+    """
+    urls, dropped = cap_links(urls)
+    if dropped > 0:
+        await event.respond(
+            f"⚠️ Too many links — processing the first {len(urls)}. "
+            f"Send the rest in a follow-up message."
+        )
+    for url in urls:
+        await processor(event, url)
+
+
+# — Basic Message Handler ————————————————————————————————————————————————————————————————————————————
 
 @bot.on(events.NewMessage)
 async def handle_message(event):
@@ -115,22 +131,12 @@ async def handle_message(event):
         await event.respond("⚠️ Database error. Please try again later.")
         return
 
-    if mode == 'get':
-        surls = extract_all_surls(text)
-        if surls:
-            try:
-                log.info("Message redirected to [get] mode")
-                await asyncio.gather(*[process_terabox(event, surl) for surl in surls])
-            except Exception as e:
-                log.error(f"Unhandled error in handle_message: {e}")
-            return
-
-    elif mode == 'exp':
+    if mode == 'exp':
         terabox_url_list = extract_all_terabox_url_exp(text)
         if terabox_url_list:
             try:
                 log.info("Message redirected to [exp] mode")
-                await asyncio.gather(*[process_terabox_experimental(event, surl) for surl in terabox_url_list])
+                await _run_batch(event, terabox_url_list, process_terabox_experimental)
             except Exception as e:
                 log.error(f"Unhandled error in handle_message: {e}")
             return
@@ -140,7 +146,10 @@ async def handle_message(event):
         if terabox_url_list:
             try:
                 log.info("Message redirected to [exphd] mode")
-                await asyncio.gather(*[process_terabox_experimental(event, surl, is_hd=True) for surl in terabox_url_list])
+                await _run_batch(
+                    event, terabox_url_list,
+                    lambda ev, url: process_terabox_experimental(ev, url, is_hd=True),
+                )
             except Exception as e:
                 log.error(f"Unhandled error in handle_message: {e}")
             return
@@ -150,7 +159,7 @@ async def handle_message(event):
         if diskwala_url_list:
             try:
                 log.info("Message redirected to [dw] mode")
-                await asyncio.gather(*[process_diskwala(event, url) for url in diskwala_url_list])
+                await _run_batch(event, diskwala_url_list, process_diskwala)
             except Exception as e:
                 log.error(f"Unhandled error in handle_message: {e}")
             return
@@ -160,12 +169,12 @@ async def handle_message(event):
     if universal_url_list:
         try:
             log.info(f"Universal DL: processing {len(universal_url_list)} link(s)")
-            await asyncio.gather(*[process_universal(event, url, bot) for url in universal_url_list])
+            await _run_batch(event, universal_url_list, lambda ev, url: process_universal(ev, url, bot))
         except Exception as e:
             log.error(f"Unhandled error in universal DL: {e}")
 
     return
-# — Telegram bot runner ——————————————————————————————————————————————————————————————————————
+# — Telegram bot runner ———————————————————————————————————————————————————————————————————————
 
 async def run_bot() -> None:
     if not BOT_TOKEN or not APP_ID or not API_HASH:
@@ -180,7 +189,7 @@ async def run_bot() -> None:
     tp_size = env_int("THREADPOOL_SIZE", 8)
     loop.set_default_executor(ThreadPoolExecutor(max_workers=tp_size, thread_name_prefix="bot"))
 
-    # ── Pre-warm HTTP connections to eliminate first-request latency ───────
+    # ── Pre-warm HTTP connections to eliminate first-request latency ─────────
     from network import prewarm_connections
     await asyncio.to_thread(prewarm_connections)
 
@@ -202,12 +211,12 @@ async def run_bot() -> None:
 
     default_commands = [ 
         BotCommand(command="start", description="Start BOT"),
-        BotCommand(command="exp", description="[Experimental] Download TeraBox video"), 
+        BotCommand(command="exp", description="[Experimental] Download TeraBox video (add 720p/1080p for quality)"), 
         BotCommand(command="exphd", description="[Experimental] Download HD TeraBox video"), 
-        BotCommand(command="get", description="Download TeraBox video [Unstable]"),
         BotCommand(command="dw", description="Download Diskwala video"),
         BotCommand(command="dl", description="Download from any supported host (GoFile, StreamTape, Dood, MediaFire, etc.)"),
         BotCommand(command="random", description="Get a random video"),
+        BotCommand(command="status", description="Bot health & stats"),
         BotCommand(command="settings", description="View Details"),
         BotCommand(command="op", description="Send feedback to admin"),
     ]
@@ -241,7 +250,7 @@ async def run_bot() -> None:
     await bot.run_until_disconnected()
 
 
-# — FastAPI app ———————————————————————————————————————————————————————————————————————————————
+# — FastAPI app ———————————————————————————————————————————————————————————————————————————————————————————————————————
 
 # — Storage cleanup for Railway (ephemeral storage) ——————————————————————————————————————
 
@@ -288,6 +297,12 @@ async def lifespan(app: FastAPI):
     cleanup_task = asyncio.create_task(_storage_cleanup_loop())
     mem_task = asyncio.create_task(_memory_monitor_loop())
     yield
+    # ── Graceful shutdown: refuse new work, let in-flight downloads finish ──
+    log.info("Shutdown: stopping new downloads and draining active tasks…")
+    telegram_logic_bot.shutting_down.set()
+    leftover = await telegram_logic_bot.drain_active_tasks(timeout=90.0)
+    if leftover:
+        log.warning(f"Shutdown: {leftover} task(s) did not finish in time — cancelling")
     mem_task.cancel()
     cleanup_task.cancel()
     bot_task.cancel()
@@ -298,6 +313,7 @@ async def lifespan(app: FastAPI):
     if bot.is_connected():
         await bot.disconnect()
     log.info("Bye!")
+
 
 app = FastAPI(lifespan=lifespan)
 

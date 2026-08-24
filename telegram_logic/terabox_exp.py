@@ -7,25 +7,41 @@ import tempfile
 from telethon import Button
 from telethon.errors import FloodWaitError
 
-from .bot import bot, _find_cached_video, _pre_upload_file, _upload_to_storage, _cancellable, terabox_queue, _safe_send, active_tasks, STORAGE_GROUP_ID
-from .helpers import format_size, format_duration, extract_surl_exp
+from .bot import bot, _find_cached_video, _pre_upload_file, _upload_to_storage, _cancellable, terabox_queue, _safe_send, active_tasks, STORAGE_GROUP_ID, shutting_down
+from .helpers import format_size, format_duration, extract_surl_exp, check_size_limit, DEFAULT_QUALITY
+from . import rate_limit
 from firebase_db.cache import add_to_cache
 from .progress_callbacks import make_download_progress_cb, make_upload_progress_cb
 
-from terabox.public_api import TeraBoxError, CancelledError
+from teraboxDL.errors import TeraBoxError, CancelledError, TeraBoxDirectError
 from teraboxDL.public_api import download_terabox_file_experimental
-from teraboxDL.terabox_dl import get_video_info, TeraBoxDirectError
+from teraboxDL.terabox_dl import get_video_info
 
 log = logging.getLogger(__name__)
 
 # — Heart Function —————————————————————————————————————————————————————————————
 
 #! ONLY PUBLIC API
-async def process_terabox_experimental(event, terabox_url: str, is_hd: bool = False) -> None:
+async def process_terabox_experimental(
+    event,
+    terabox_url: str,
+    is_hd: bool = False,
+    quality: str | None = None,
+) -> None:
+    if shutting_down.is_set():
+        await _safe_send(event.respond, "🛑 Bot is restarting — please try again in a minute.")
+        return
+
+    # Per-user retry budget
+    blocked = rate_limit.check_rate_limit(event.chat_id)
+    if blocked:
+        await _safe_send(event.respond, blocked)
+        return
+
     # If currently in flood cooldown → queue immediately
     rem = terabox_queue.flood_remaining()
     if rem > 0:
-        await terabox_queue.put(helper, event, terabox_url, is_hd)
+        await terabox_queue.put(helper, event, terabox_url, is_hd, quality or DEFAULT_QUALITY)
         try:
             await event.respond(
                 "⏳ Bot overloaded! Your request has been queued "
@@ -40,11 +56,11 @@ async def process_terabox_experimental(event, terabox_url: str, is_hd: bool = Fa
     # Try processing normally under the semaphore
     async with terabox_queue.semaphore:
         try:
-            await helper(event, terabox_url, is_hd)
+            await helper(event, terabox_url, is_hd, quality or DEFAULT_QUALITY)
         except FloodWaitError as e:
             # Pipeline hit flood → set cooldown, queue, notify user
             terabox_queue.update_flood_until(e.seconds)
-            await terabox_queue.put(helper, event, terabox_url, is_hd)
+            await terabox_queue.put(helper, event, terabox_url, is_hd, quality or DEFAULT_QUALITY)
             try:
                 await event.respond(
                     f"⏳ Bot overloaded! Your request has been queued "
@@ -54,7 +70,7 @@ async def process_terabox_experimental(event, terabox_url: str, is_hd: bool = Fa
                 pass
 
 
-async def helper(event, terabox_url: str, is_hd: bool) -> None:
+async def helper(event, terabox_url: str, is_hd: bool, quality: str = DEFAULT_QUALITY) -> None:
     """Inner pipeline, runs under the concurrency semaphore."""
     chat_id = event.chat_id
     surl = extract_surl_exp(terabox_url)
@@ -93,7 +109,7 @@ async def helper(event, terabox_url: str, is_hd: bool) -> None:
         _cleanup_files(*paths)
 
     try:
-        # — Phase 1: Cache lookup ——————————————————————————————————————————————
+        # — Phase 1: Cache lookup ——————————————————————————————————————————————————————————————
         status = await _safe_send(event.respond, f"🔍 Checking cache for `{surl}`…")
 
         cached_msg = await _find_cached_video(surl, user_mode)
@@ -113,18 +129,20 @@ async def helper(event, terabox_url: str, is_hd: bool) -> None:
                 await _safe_send(status.edit, "❌ Failed to send video.")
             return
 
-        # — Phase 2: Prepare metadata ——————————————————————————————————————————
+        # — Phase 2: Prepare metadata ————————————————————————————————————————————————————
         await _safe_send(status.edit, "⏳ Fetching metadata…", buttons=cancel_btn)
 
         #! GET FILE INFO
         try:
-            info = await asyncio.to_thread(get_video_info, terabox_url, is_hd)
+            info = await asyncio.to_thread(get_video_info, terabox_url, is_hd, quality)
         except TeraBoxDirectError as e:
             log.error(f"Metadata fetch failed for surl={surl}: {e}")
+            rate_limit.register_failure(chat_id)
             await _safe_send(status.edit, f"❌ {e}\n\nYou can try different *mode* to download.\nSwitch *mode* from /settings")
             return
         except Exception as e:
             log.error(f"Metadata fetch failed for surl={surl}: {e}")
+            rate_limit.register_failure(chat_id)
             await _safe_send(status.edit, f"❌ Failed to get video info: {e}\n\nYou can try different *mode* to download.\nSwitch *mode* from /settings")
             return
 
@@ -132,9 +150,22 @@ async def helper(event, terabox_url: str, is_hd: bool) -> None:
         filename = info["filename"]
         size_str = format_size(info["size"])
 
+        # — File size limit ————————————————————————————————————————————————————————————————
+        size_error = check_size_limit(info["size"])
+        if size_error:
+            log.info(f"Size limit hit for surl={surl}: {info['size']} bytes")
+            await _safe_send(
+                status.edit,
+                f"📦 **{filename}**\n📐 Size: **{size_str}**\n\n{size_error}",
+            )
+            return
+
+        # Single status update — a separate "Quality:" edit would be
+        # instantly overwritten and just burns an API call.
+        quality_line = f"\n🎯 Quality: **{quality.split('_')[-1]}**\n" if (quality != DEFAULT_QUALITY and not is_hd) else "\n"
         await _safe_send(
             status.edit,
-            f"📦 **{filename}**\n📐 Size: **{size_str}**\n\n⬇️ Downloading… **0%**",
+            f"📦 **{filename}**\n📐 Size: **{size_str}**{quality_line}\n⬇️ Downloading… **0%**",
             buttons=cancel_btn,
         )
 
@@ -149,10 +180,12 @@ async def helper(event, terabox_url: str, is_hd: bool) -> None:
             return
         except TeraBoxError as e:
             log.error(f"Download error for surl={surl}: {e}")
+            rate_limit.register_failure(chat_id)
             await _safe_send(status.edit, f"❌ Download failed: {e}\n\nYou can try different *mode* to download.\nSwitch *mode* from /settings")
             return
         except Exception as e:
             log.exception(f"Unexpected download error for surl={surl}")
+            rate_limit.register_failure(chat_id)
             await _safe_send(status.edit, f"❌ Download failed: {e}\n\nYou can try different *mode* to download.\nSwitch *mode* from /settings")
             return
         dl_time = time.time() - dl_start
@@ -165,7 +198,7 @@ async def helper(event, terabox_url: str, is_hd: bool) -> None:
         # Use actual file size (compressed TS/MP4) instead of original API size
         size_str = format_size(os.path.getsize(filepath))
 
-        # — Phase 4: Upload to storage group (cache) ———————————————————————————
+        # — Phase 4: Upload to storage group (cache) ———————————————————————————————————————
         if cancel_event.is_set():
             _cleanup_all(filepath)
             await _safe_send(status.edit, "🚫 Cancelled.")
@@ -202,7 +235,7 @@ async def helper(event, terabox_url: str, is_hd: bool) -> None:
                 input_file = None  # upload itself failed → fallback re-uploads from disk
                 # storage_msg stays None → fall back to direct upload below
 
-        # — Phase 5: Deliver to user ———————————————————————————————————————————
+        # — Phase 5: Deliver to user ———————————————————————————————————————————————————————
         def _build_caption(dl_t: float, up_t: float, total_t: float) -> str:
             return (
                 f"📦 `{filename}`\n"
@@ -279,6 +312,7 @@ async def helper(event, terabox_url: str, is_hd: bool) -> None:
                 return
 
         _cleanup_all(filepath)
+        rate_limit.register_success(chat_id)
 
         try:
             await _safe_send(status.delete)
