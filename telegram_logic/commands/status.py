@@ -7,11 +7,12 @@ only to ADMIN_ID when set.
 """
 import os
 import time
+import asyncio
 import logging
 from telethon import events
 
 from ..bot import bot, active_tasks, terabox_queue, shutting_down, START_TIME
-from ..helpers import env_int
+from ..helpers import env_int, format_size
 from .. import rate_limit
 from teraboxDL.terabox_dl import cookie_pool_health
 
@@ -56,7 +57,7 @@ def _storage_dir_mb() -> float:
         return 0.0
 
 
-def build_status_text(is_admin: bool) -> str:
+def build_status_text(is_admin: bool, stats: dict | None = None) -> str:
     uptime = time.time() - START_TIME
     flood = terabox_queue.flood_remaining()
 
@@ -77,6 +78,18 @@ def build_status_text(is_admin: bool) -> str:
     disk = _storage_dir_mb()
     if disk:
         lines.append(f"💾 Storage dir: **{disk:.1f} MB**")
+
+    if stats is not None:
+        t, tot = stats["today"], stats["totals"]
+        lines.append(
+            f"📈 Today: **{t['ok']}✓ / {t['fail']}✗**"
+            + (f" · {format_size(t['bytes'])} delivered" if t["bytes"] else "")
+        )
+        if is_admin:
+            lines.append(
+                f"📊 All-time: **{tot['ok']}✓ / {tot['fail']}✗**"
+                + (f" · {format_size(tot['bytes'])}" if tot["bytes"] else "")
+            )
 
     if is_admin:
         lines += ["", "🔧 **Admin detail**"]
@@ -104,5 +117,11 @@ def build_status_text(is_admin: bool) -> str:
 async def cmd_status(event):
     log.info(f"Received /status command from chat {event.chat_id}")
     is_admin = bool(ADMIN_ID and event.chat_id == ADMIN_ID)
-    await event.respond(build_status_text(is_admin))
+    stats = None
+    try:
+        from firebase_db.stats import get_stats as _get_stats
+        stats = await asyncio.to_thread(_get_stats)
+    except Exception:
+        pass
+    await event.respond(build_status_text(is_admin, stats))
     raise events.StopPropagation

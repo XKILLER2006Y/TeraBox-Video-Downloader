@@ -28,14 +28,14 @@ from .db import get_db
 
 log = logging.getLogger(__name__)
 
-# ── Types ──────────────────────────────────────────────────────────────────────────────
+# ── Types ─────────────────────────────────────────────────────────────────────────—————
 
 MODE = Literal["exp", "exphd", "dw"]
 
 # Legacy modes mapped to their modern equivalents on read.
 _MODE_MIGRATION = {"get": "exp"}  # /get (legacy proxy pipeline) was removed
 
-# ── In-memory cache (reduces Firestore reads) ──────────────────────────────────
+# ── In-memory cache (reduces Firestore reads) ─────────────────────────—————————
 # Structure: { str(chat_id): {"username": ..., "last_active": float, "mode": ...} }
 # Populated on first read; kept in sync on every write.
 # Capped at 1000 entries — evicts oldest by last_active when full.
@@ -203,3 +203,55 @@ def get_all_users() -> dict[str, dict]:
     except Exception as e:
         log.error(f"[DB] get_all_users failed: {e}")
         return {}
+
+
+# ── Download history ─────────────────────────────────────────────────────────——
+_HISTORY_LIMIT = 20  # entries kept per user
+
+
+def record_history(chat_id: int, title: str, key: str) -> None:
+    """
+    Append a completed download to the user's history (kept to last 20).
+
+    Stored on the user document as:
+        history: [ {"t": <title>, "k": <surl/link-id>, "at": <unix>}, ... ]
+
+    Best-effort: failures are logged, never raised.
+    """
+    uid = str(chat_id)
+    entry = {"t": title[:120], "k": key[:80], "at": time.time()}
+    try:
+        # Prefer cached copy when fresh; otherwise read once from Firestore
+        existing = None
+        if uid in _USERS_CACHE and isinstance(_USERS_CACHE[uid].get("history"), list):
+            existing = _USERS_CACHE[uid]["history"]
+        if existing is None:
+            snap = get_db().collection(_USERS_COLLECTION).document(uid).get(["history"])
+            existing = (snap.to_dict() or {}).get("history") or [] if snap.exists else []
+
+        updated = (list(existing) + [entry])[-_HISTORY_LIMIT:]
+
+        get_db().collection(_USERS_COLLECTION).document(uid).set(
+            {"history": updated}, merge=True
+        )
+        # Keep cache coherent
+        _USERS_CACHE.setdefault(uid, {})["history"] = updated
+        log.debug(f"History recorded for {uid}: {entry['t']}")
+    except Exception as e:
+        log.warning(f"[DB] record_history failed for {uid}: {e}")
+
+
+def get_history(chat_id: int) -> list[dict]:
+    """
+    Return the user's download history, newest last. [] on error/absence.
+    """
+    uid = str(chat_id)
+    try:
+        if uid in _USERS_CACHE and isinstance(_USERS_CACHE[uid].get("history"), list):
+            return _USERS_CACHE[uid]["history"]
+        snap = get_db().collection(_USERS_COLLECTION).document(uid).get(["history"])
+        if snap.exists:
+            return (snap.to_dict() or {}).get("history") or []
+    except Exception as e:
+        log.warning(f"[DB] get_history failed for {uid}: {e}")
+    return []
