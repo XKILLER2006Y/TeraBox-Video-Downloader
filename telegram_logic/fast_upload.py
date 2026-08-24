@@ -9,7 +9,7 @@ import os
 import math
 import asyncio
 import logging
-from telethon import utils
+from telethon import utils  # noqa: F401 — kept for future Telethon helpers
 from telethon.tl import types, functions
 
 log = logging.getLogger(__name__)
@@ -30,10 +30,10 @@ async def _send_partial(
 ):
     """Send a single chunk to Telegram."""
     await client._sender.send(
-        functions.upload.SaveBigFilePart(
+        functions.upload.SaveBigFilePartRequest(
             file_id=file_id,
             file_part=file_part,
-            file_part_count=file_total_parts,
+            file_total_parts=file_total_parts,
             bytes=chunk_data,
         )
     )
@@ -63,7 +63,9 @@ async def upload_file_fast(
     the entire file into memory. Only MAX_PARALLEL chunks are in memory at once.
     """
     file_size = os.path.getsize(file_path)
-    file_id = utils.generate_random_long()
+    # 63-bit random file id (telethon.utils.generate_random_long was
+    # removed in newer Telethon versions)
+    file_id = int.from_bytes(os.urandom(8), "big") & 0x7FFFFFFFFFFFFFFF
     file_total_parts = math.ceil(file_size / CHUNK_SIZE)
     
     log.info(f"Fast upload: {os.path.basename(file_path)} ({file_size / (1024*1024):.1f} MB, {file_total_parts} parts)")
@@ -77,7 +79,7 @@ async def upload_file_fast(
             # Read chunk from disk (thread pool — non-blocking)
             chunk_data = await _read_chunk(_file_handle, offset, size)
             await _send_partial(
-                client, file_id, chunk_data, file_total_parts, file_size,
+                client, file_id, part_idx, file_total_parts, file_size,
                 chunk_data, progress_callback,
             )
     
@@ -93,51 +95,6 @@ async def upload_file_fast(
         parts=file_total_parts,
         name=os.path.basename(file_path),
     )
-
-
-async def download_file_fast(
-    client,
-    msg,
-    out: str,
-    progress_callback=None,
-) -> str:
-    """
-    Download a file from Telegram using parallel chunked downloads.
-    """
-    if msg.media is None:
-        raise ValueError("Message has no media to download")
-    
-    media = msg.media
-    if hasattr(media, 'photo'):
-        loc = media.photo
-        file_size = max(p.size for p in loc.sizes)
-        name = f"{loc.id}.jpg"
-    elif hasattr(media, 'document'):
-        loc = media.document
-        file_size = loc.size
-        name = next((attr.file_name for attr in loc.attributes 
-                     if hasattr(attr, 'file_name')), str(loc.id))
-    else:
-        raise ValueError("Unsupported media type")
-    
-    log.info(f"Fast download: {name} ({file_size / (1024*1024):.1f} MB)")
-    
-    download_chunk = 1024 * 1024
-    total_parts = math.ceil(file_size / download_chunk)
-    
-    downloaded = 0
-    
-    with open(out, 'wb') as f:
-        for part in range(total_parts):
-            data = await client._get_file(loc, part, total_parts)
-            f.write(data)
-            downloaded += len(data)
-            
-            if progress_callback:
-                progress_callback(downloaded, file_size)
-    
-    log.info(f"Fast download complete: {name}")
-    return out
 
 
 def is_large(file_size: int) -> bool:

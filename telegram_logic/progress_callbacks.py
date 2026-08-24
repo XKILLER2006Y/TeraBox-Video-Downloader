@@ -1,10 +1,17 @@
 import time
 import asyncio
+from collections.abc import Callable
 from .helpers import format_size
 
-# — Progress callback for Telethon uploads —————————————————————————————————————————
+# — Progress callback for Telethon uploads ———————————————————————————————————————————————————————
 
-def make_download_progress_cb(status_msg, filename, size_str, loop, cancel_btn=None):
+def make_download_progress_cb(
+    status_msg,
+    filename: str,
+    size_str: str,
+    loop: asyncio.AbstractEventLoop,
+    cancel_btn=None,
+) -> Callable[[int, int], None]:
     """Create a progress callback for the download phase."""
     last_update = [0.0]
 
@@ -33,7 +40,13 @@ def make_download_progress_cb(status_msg, filename, size_str, loop, cancel_btn=N
     return callback
 
 
-def make_upload_progress_cb(status_msg, filename, size_str, loop, cancel_btn=None):
+def make_upload_progress_cb(
+    status_msg,
+    filename: str,
+    size_str: str,
+    loop: asyncio.AbstractEventLoop,
+    cancel_btn=None,
+) -> Callable[[int, int], None]:
     """Create a progress callback for Telethon file upload."""
     last_update = [0.0]  # track last update time to avoid flooding
 
