@@ -23,10 +23,10 @@ import threading
 import time
 import requests
 from urllib.parse import urlparse, urljoin
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 
 from network import get_session, _browser_headers as _BROWSER_HEADERS  # noqa: E402
-from terabox.internal_helpers import CancelledError
+from teraboxDL.errors import CancelledError  # noqa: E402
 
 log = logging.getLogger(__name__)
 
@@ -40,9 +40,9 @@ _PLAIN_HEADERS = {
 
 CHUNK_SIZE = 1 * 1024 * 1024  # 1 MB
 HLS_PARALLEL_SEGMENTS = 4  # parallel segment download workers
-
-# Module-level executor — reused across HLS downloads to avoid thread creation overhead
-_hls_executor = ThreadPoolExecutor(max_workers=HLS_PARALLEL_SEGMENTS, thread_name_prefix="hls-dl")
+# Segments submitted ahead of the consumption point. Bounds peak disk usage
+# (in-flight parts only) and avoids queueing thousands of futures at once.
+HLS_SUBMIT_WINDOW = HLS_PARALLEL_SEGMENTS * 3
 
 
 def _build_session() -> requests.Session:
@@ -205,16 +205,22 @@ def _download_hls_from_manifest(
     start_time = time.time()
 
     def _download_segment(seg_url: str, seg_index: int) -> int:
-        """Download a single segment to its temp file. Returns bytes downloaded."""
+        """
+        Download a single segment to its temp file. Returns bytes downloaded.
+
+        NOTE: Referer is passed per-request — mutating the shared session's
+        headers here would race with other threads downloading from
+        different hosts.
+        """
         session = _build_session()
         parsed = urlparse(seg_url)
-        session.headers["Referer"] = f"{parsed.scheme}://{parsed.netloc}/"
+        referer_headers = {**_PLAIN_HEADERS, "Referer": f"{parsed.scheme}://{parsed.netloc}/"}
 
         for attempt in range(3):
             if cancel_event and cancel_event.is_set():
                 raise CancelledError("Download cancelled")
             try:
-                seg_r = session.get(seg_url, stream=True, timeout=60)
+                seg_r = session.get(seg_url, headers=referer_headers, stream=True, timeout=60)
                 seg_r.raise_for_status()
                 seg_bytes = 0
                 with open(part_paths[seg_index], "wb") as f:
@@ -252,18 +258,29 @@ def _download_hls_from_manifest(
         return 0
 
     try:
-        futures = {
-            _hls_executor.submit(_download_segment, url, i): i
-            for i, url in enumerate(segment_urls)
-        }
-        for future in as_completed(futures):
-            future.result()  # re-raise any exception
+        # Rolling window: keep HLS_SUBMIT_WINDOW segments in flight, consume
+        # and append them IN ORDER as they complete. Peak disk usage is only
+        # the in-flight parts, and we skip the old full-file copy pass.
+        with ThreadPoolExecutor(max_workers=HLS_PARALLEL_SEGMENTS, thread_name_prefix="hls-dl") as ex:
+            pending: dict[int, object] = {}
+            next_submit = 0
 
-        # Concatenate segments in order
-        with open(ts_output, "wb") as out:
-            for part_path in part_paths:
-                with open(part_path, "rb") as p:
-                    shutil.copyfileobj(p, out)
+            with open(ts_output, "wb") as out:
+                for i in range(num_segments):
+                    if cancel_event and cancel_event.is_set():
+                        raise CancelledError("Download cancelled")
+
+                    while next_submit < num_segments and len(pending) < HLS_SUBMIT_WINDOW:
+                        pending[next_submit] = ex.submit(_download_segment, segment_urls[next_submit], next_submit)
+                        next_submit += 1
+
+                    fut = pending.pop(i)
+                    fut.result()  # re-raise segment failure
+
+                    # Append this segment immediately, then free its disk space
+                    with open(part_paths[i], "rb") as p:
+                        shutil.copyfileobj(p, out)
+                    os.remove(part_paths[i])
 
         total_downloaded = os.path.getsize(ts_output)
         log.info(f"All segments downloaded: {ts_output} ({total_downloaded / 1e6:.2f} MB)")

@@ -28,7 +28,7 @@ import requests
 
 log = logging.getLogger(__name__)
 
-# ── Configuration ────────────────────────────────────────────────────────────
+# ── Configuration ──────────────────────────────────────────────────────────────────────
 
 DISKWALA_SESSION = os.getenv("SESSION")
 DISKWALA_APP_ID = int(os.getenv("APP_ID", "0"))
@@ -52,14 +52,14 @@ DISKWALA_URL_RE = re.compile(
 _LINK_ID_RE = re.compile(r"[a-fA-F0-9]{24}")
 
 
-# ── Exceptions ───────────────────────────────────────────────────────────────
+# ── Exceptions ─────────────────────────────────────────────────────────────────────────
 
-class DiskwalaDirectError(Exception):
-    """Raised when direct Diskwala resolution fails."""
-    pass
+from diskwalaDL.errors import DiskwalaDirectError  # noqa: E402 — re-exported for compat
+
+__all__ = ["DiskwalaDirectError", "get_diskwala_info_direct"]
 
 
-# ── AES-GCM decryption ──────────────────────────────────────────────────────
+# ── AES-GCM decryption ─────────────────────────────────────────────────────────────———
 
 def _decrypt_diskwala_response(encrypted_obj: dict) -> dict:
     """
@@ -176,7 +176,7 @@ async def _get_auth_token() -> str:
     return tg_web_app_data
 
 
-# ── API calls ────────────────────────────────────────────────────────────────
+# ── API calls ─────────────────────────────────────────────────────────────────—————————————————————
 
 def _make_headers(auth_token: str) -> dict:
     return {
