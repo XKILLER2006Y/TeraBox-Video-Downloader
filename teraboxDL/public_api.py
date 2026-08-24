@@ -1,5 +1,6 @@
 import threading
 import os
+import re
 import hashlib
 import logging
 import requests
@@ -8,7 +9,7 @@ import random
 import shutil
 from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from terabox.internal_helpers import _safe_filename, TeraBoxError, CancelledError
+from .errors import TeraBoxError, CancelledError
 from teraboxDL.stream_downloader import is_streaming_manifest, download_from_stream_url
 from network import get_session
 
@@ -16,6 +17,11 @@ log = logging.getLogger(__name__)
 
 STORAGE_DIR = "storage"
 CHUNK_SIZE = 1 * 1024 * 1024  # 1 MB per read chunk within each part
+
+
+def _safe_filename(name: str) -> str:
+    """Sanitize a filename for local disk storage."""
+    return re.sub(r'[\\/*?:"<>|]', "_", name)
 
 # Number of parallel parts to split a single download into.
 # 4 connections → ~4x throughput on CDNs that allow range requests.

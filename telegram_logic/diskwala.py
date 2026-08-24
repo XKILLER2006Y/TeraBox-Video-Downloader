@@ -9,15 +9,17 @@ from telethon.errors import FloodWaitError
 from .bot import (
     bot, _find_cached_video, _pre_upload_file, _upload_to_storage,
     _cancellable, terabox_queue, _safe_send, active_tasks, STORAGE_GROUP_ID,
+    shutting_down,
 )
-from .helpers import format_size, format_duration
+from .helpers import format_size, format_duration, check_size_limit
+from . import rate_limit
 from firebase_db.cache import add_to_cache
 from .progress_callbacks import make_download_progress_cb, make_upload_progress_cb
 
-from terabox.public_api import TeraBoxError, CancelledError
+from teraboxDL.errors import DownloadError, CancelledError
 from teraboxDL.public_api import download_terabox_file_experimental
-from diskwalaDL.public_api import get_diskwala_info, extract_diskwala_id, DiskwalaError
-from diskwalaDL.diskwala_dl import DiskwalaDirectError
+from diskwalaDL.public_api import get_diskwala_info, extract_diskwala_id
+from diskwalaDL.errors import DiskwalaError, DiskwalaDirectError
 
 log = logging.getLogger(__name__)
 
@@ -29,6 +31,16 @@ DW_MODE = "dw"
 
 #! ONLY PUBLIC API
 async def process_diskwala(event, diskwala_url: str) -> None:
+    if shutting_down.is_set():
+        await _safe_send(event.respond, "🛑 Bot is restarting — please try again in a minute.")
+        return
+
+    # Per-user retry budget
+    blocked = rate_limit.check_rate_limit(event.chat_id)
+    if blocked:
+        await _safe_send(event.respond, blocked)
+        return
+
     # If currently in flood cooldown → queue immediately
     rem = terabox_queue.flood_remaining()
     if rem > 0:
@@ -92,7 +104,7 @@ async def _dw_helper(event, diskwala_url: str) -> None:
                     log.warning(f"Could not clean up {p}: {e}")
 
     try:
-        # — Phase 1: Cache lookup ——————————————————————————————————————————————
+        # — Phase 1: Cache lookup ——————————————————————————————————————————————————————————————
         status = await _safe_send(event.respond, f"🔍 Checking cache for `{link_id}`…")
 
         cached_msg = await _find_cached_video(link_id, user_mode)
@@ -120,20 +132,33 @@ async def _dw_helper(event, diskwala_url: str) -> None:
             info = await asyncio.to_thread(get_diskwala_info, diskwala_url)
         except DiskwalaDirectError as e:
             log.error(f"Diskwala direct resolution failed for {link_id}: {e}")
+            rate_limit.register_failure(chat_id)
             await _safe_send(status.edit, f"❌ {e}")
             return
         except DiskwalaError as e:
             log.error(f"Diskwala metadata fetch failed for {link_id}: {e}")
+            rate_limit.register_failure(chat_id)
             await _safe_send(status.edit, f"❌ Failed to get video info: {e}")
             return
         except Exception as e:
             log.exception(f"Unexpected Diskwala metadata error for {link_id}")
+            rate_limit.register_failure(chat_id)
             await _safe_send(status.edit, f"❌ Failed to get video info: {e}")
             return
 
         download_url = info["download_url"]
         filename = info["filename"]
         size_str = format_size(info["size"])
+
+        # — File size limit ————————————————————————————————————————————————————————
+        size_error = check_size_limit(info["size"])
+        if size_error:
+            log.info(f"Size limit hit for {link_id}: {info['size']} bytes")
+            await _safe_send(
+                status.edit,
+                f"📦 **{filename}**\n📐 Size: **{size_str}**\n\n{size_error}",
+            )
+            return
 
         await _safe_send(
             status.edit,
@@ -152,12 +177,14 @@ async def _dw_helper(event, diskwala_url: str) -> None:
         except CancelledError:
             await _safe_send(status.edit, "🚫 Cancelled.")
             return
-        except TeraBoxError as e:
+        except DownloadError as e:
             log.error(f"Download error for {link_id}: {e}")
+            rate_limit.register_failure(chat_id)
             await _safe_send(status.edit, f"❌ Download failed: {e}")
             return
         except Exception as e:
             log.exception(f"Unexpected download error for {link_id}")
+            rate_limit.register_failure(chat_id)
             await _safe_send(status.edit, f"❌ Download failed: {e}")
             return
         dl_time = time.time() - dl_start
@@ -170,7 +197,7 @@ async def _dw_helper(event, diskwala_url: str) -> None:
         # Use actual file size on disk instead of the API-reported size
         size_str = format_size(os.path.getsize(filepath))
 
-        # — Phase 4: Upload to storage group (cache) ———————————————————————————
+        # — Phase 4: Upload to storage group (cache) ———————————————————————————————————————
         if cancel_event.is_set():
             _cleanup_files(filepath, os.path.splitext(filepath)[0] + ".ts")
             await _safe_send(status.edit, "🚫 Cancelled.")
@@ -207,7 +234,7 @@ async def _dw_helper(event, diskwala_url: str) -> None:
                 input_file = None  # upload itself failed → fallback re-uploads from disk
                 # storage_msg stays None → fall back to direct upload below
 
-        # — Phase 5: Deliver to user ———————————————————————————————————————————
+        # — Phase 5: Deliver to user ———————————————————————————————————————————————————————
         def _build_caption(dl_t: float, up_t: float, total_t: float) -> str:
             return (
                 f"📦 `{filename}`\n"
@@ -290,6 +317,8 @@ async def _dw_helper(event, diskwala_url: str) -> None:
                     log.info(f"Deleted local file: {f_path}")
                 except Exception as e:
                     log.warning(f"Could not delete local file {f_path}: {e}")
+
+        rate_limit.register_success(chat_id)
 
         try:
             await _safe_send(status.delete)
