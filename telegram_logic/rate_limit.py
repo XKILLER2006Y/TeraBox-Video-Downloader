@@ -14,10 +14,11 @@ import logging
 from collections import deque
 
 from .helpers import env_int
+from . import alerts
 
 log = logging.getLogger(__name__)
 
-# ── Tunables (env-configurable) ────────────────────────────────────────────────────────────────
+# ── Tunables (env-configurable) ─────────────────────────────────────────────────────────———————
 MAX_FAILURES = env_int("MAX_FAILURES_PER_WINDOW", 5)     # failures allowed…
 FAILURE_WINDOW = env_int("FAILURE_WINDOW_SECONDS", 600)  # …within this window (s)
 COOLDOWN_SECONDS = env_int("FAILURE_COOLDOWN_SECONDS", 600)  # block duration
@@ -60,6 +61,12 @@ def register_failure(chat_id: int) -> None:
             _blocked_until[chat_id] = now + COOLDOWN_SECONDS
             dq.clear()
             log.warning(f"User {chat_id} blocked for {COOLDOWN_SECONDS}s after {MAX_FAILURES} failures")
+            alerts.dispatch(
+                f"🚫 User `{chat_id}` hit the retry budget ({MAX_FAILURES} failures) "
+                f"and is blocked for {COOLDOWN_SECONDS // 60} min.",
+                key=f"budget:{chat_id}",
+                cooldown=3600,
+            )
 
 
 def register_success(chat_id: int) -> None:
