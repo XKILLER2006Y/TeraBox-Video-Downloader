@@ -34,7 +34,7 @@ from .db import get_db
 
 log = logging.getLogger(__name__)
 
-# ── Types & constants ──────────────────────────────────────────────────────────
+# ── Types & constants ──────────────────────────────────────────────────────────────────────────
 
 MODE = Literal["get", "exp", "exphd", "dw"]
 _CACHE_COLLECTION = "cache"
@@ -52,13 +52,13 @@ _RANDOM_SNAPSHOT_LOCK = threading.Lock()
 _FIRESTORE_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="firestore")
 
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
+# ── Helpers ────────────────────────────────────────────────────────────────────────────────────
 
 def _bucket_ref(bucket: str):
     return get_db().collection(_CACHE_COLLECTION).document(bucket)
 
 
-# ── Public API ─────────────────────────────────────────────────────────────────
+# ── Public API ─────────────────────────────────────────────────────────────────────────────────
 
 def add_to_cache(surl: str, message_id: int, user_mode: MODE) -> bool:
     """
@@ -89,17 +89,15 @@ def search_in_cache(surl: str, user_mode: MODE) -> int:
     Returns message_id (int) on hit, -1 on miss or DB error.
 
     Priority:
-      get   → exphd, exp, get
-      exp   → exphd, exp
+      exp   → exphd, exp   (HD cache serves SD requests)
       exphd → exphd only
+      dw    → dw only
 
     Parallelizes Firestore reads for lower latency on misses.
     """
     safe_key = _encode_key(surl)
 
-    if user_mode == "get":
-        search_order = ["exphd", "exp", "get"]
-    elif user_mode == "exp":
+    if user_mode == "exp":
         search_order = ["exphd", "exp"]
     elif user_mode == "dw":
         search_order = ["dw"]
@@ -180,7 +178,7 @@ def get_cache_for_random() -> dict:
         return merged
 
 
-# ── Key encoding ───────────────────────────────────────────────────────────────
+# ── Key encoding ───────────────────────────────────────────────────────────────────────────────
 # Firestore field names must match [a-zA-Z_][a-zA-Z_0-9]*-.
 # TeraBox surls contain hyphens and may start with digits, both of which are
 # rejected by Firestore's unquoted property-path parser.

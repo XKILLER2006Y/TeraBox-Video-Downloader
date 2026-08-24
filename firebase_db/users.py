@@ -28,9 +28,12 @@ from .db import get_db
 
 log = logging.getLogger(__name__)
 
-# ── Types ──────────────────────────────────────────────────────────────────────
+# ── Types ──────────────────────────────────────────────────────────────────────────────
 
-MODE = Literal["get", "exp", "exphd", "dw"]
+MODE = Literal["exp", "exphd", "dw"]
+
+# Legacy modes mapped to their modern equivalents on read.
+_MODE_MIGRATION = {"get": "exp"}  # /get (legacy proxy pipeline) was removed
 
 # ── In-memory cache (reduces Firestore reads) ──────────────────────────────────
 # Structure: { str(chat_id): {"username": ..., "last_active": float, "mode": ...} }
@@ -119,18 +122,28 @@ def track_user(chat_id: int, username: str | None) -> None:
         # Non-fatal — tracking is best-effort, do not crash the bot
 
 
+def _normalize_mode(mode: str | None) -> MODE:
+    """Map legacy mode values to their modern equivalents."""
+    if not mode:
+        return "exp"
+    return _MODE_MIGRATION.get(mode, mode)  # type: ignore[return-value]
+
+
 def get_user_mode(chat_id: int) -> MODE:
     """
     Return the user's current download mode.
     Reads from in-memory cache first; falls back to Firestore on cold-start.
     Default: "exp"
 
+    Legacy modes (e.g. "get") are transparently migrated to their modern
+    equivalents ("exp") so removed pipelines never break existing users.
+
     Returns "exp" on any DB error so the bot stays functional.
     """
     uid = str(chat_id)
 
     if uid in _USERS_CACHE:
-        return _USERS_CACHE[uid].get("mode", "exp")
+        return _normalize_mode(_USERS_CACHE[uid].get("mode", "exp"))
 
     try:
         # Cold-start: fetch from Firestore once, then cache
@@ -139,7 +152,7 @@ def get_user_mode(chat_id: int) -> MODE:
             data = snap.to_dict()
             _USERS_CACHE[uid] = data
             _evict_if_needed()
-            return data.get("mode", "exp")
+            return _normalize_mode(data.get("mode", "exp"))
     except Exception as e:
         log.error(f"[DB] get_user_mode failed for uid={uid}: {e}")
 

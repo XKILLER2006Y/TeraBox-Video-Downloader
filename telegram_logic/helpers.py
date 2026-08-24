@@ -133,3 +133,72 @@ def format_duration(seconds: float) -> str:
         parts.append(f"{secs}s")
         
     return " ".join(parts[:2]) # Return max 2 most significant parts for nice reading
+
+
+# ── Quality selection (/exp <url> 720p) ────────────────────────────────────────
+
+# Trailing token only, so URLs that merely contain "720" are never misparsed.
+_QUALITY_TAIL_RE = re.compile(r"(?:^|\s)(360|480|720|1080)p?\s*$", re.IGNORECASE)
+
+QUALITY_MAP: dict[int, str] = {
+    360: "M3U8_AUTO_360",
+    480: "M3U8_AUTO_480",
+    720: "M3U8_AUTO_720",
+    1080: "M3U8_AUTO_1080",
+}
+
+DEFAULT_QUALITY = "M3U8_AUTO_1080"
+
+
+def parse_quality(text: str) -> tuple[str, str]:
+    """
+    Extract a trailing quality token (e.g. `720` / `720p`) from the end of
+    the message text.
+
+    Returns (remaining_text, terabox_quality_string). remaining_text has the
+    quality token stripped; terabox_quality_string defaults to AUTO_1080.
+    """
+    m = _QUALITY_TAIL_RE.search(text)
+    if not m:
+        return text, DEFAULT_QUALITY
+    height = int(m.group(1))
+    quality = QUALITY_MAP.get(height, DEFAULT_QUALITY)
+    remaining = (text[: m.start()] + " " + text[m.end():]).strip()
+    return remaining, quality
+
+
+# ── File size limit ────────────────────────────────────────────────────────────
+
+MAX_FILE_SIZE_MB = env_int("MAX_FILE_SIZE_MB", 0)  # 0 = unlimited
+
+
+def check_size_limit(size_bytes: int) -> str | None:
+    """
+    Return a user-facing rejection message when size_bytes exceeds
+    MAX_FILE_SIZE_MB, else None. Disabled when MAX_FILE_SIZE_MB is 0.
+    """
+    if MAX_FILE_SIZE_MB <= 0 or size_bytes <= 0:
+        return None
+    if size_bytes > MAX_FILE_SIZE_MB * 1024 * 1024:
+        return (
+            f"❌ File too large: **{format_size(size_bytes)}** "
+            f"(limit: **{MAX_FILE_SIZE_MB} MB**).\n\n"
+            f"Ask the bot admin to raise `MAX_FILE_SIZE_MB` if you need bigger files."
+        )
+    return None
+
+
+# ── Batch download cap ─────────────────────────────────────────────────────────
+
+MAX_LINKS_PER_MESSAGE = env_int("MAX_LINKS_PER_MESSAGE", 5)
+
+
+def cap_links(urls: list[str]) -> tuple[list[str], int]:
+    """
+    Cap the number of links processed per message.
+
+    Returns (kept_urls, dropped_count).
+    """
+    if MAX_LINKS_PER_MESSAGE <= 0 or len(urls) <= MAX_LINKS_PER_MESSAGE:
+        return urls, 0
+    return urls[:MAX_LINKS_PER_MESSAGE], len(urls) - MAX_LINKS_PER_MESSAGE

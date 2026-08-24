@@ -17,8 +17,10 @@ import time
 import requests
 
 from telegram_logic.bot import (
-    _safe_send, STORAGE_GROUP_ID,
+    _safe_send, STORAGE_GROUP_ID, shutting_down,
 )
+from telegram_logic import rate_limit
+from telegram_logic.helpers import env_int
 from universalDL import resolve_universal, UniversalDL
 from network import get_session
 
@@ -28,8 +30,8 @@ logger = logging.getLogger(__name__)
 _active_tasks: dict[tuple[int, str], threading.Event] = {}
 _lock = threading.Lock()
 
-# Size limit: 2 GB
-MAX_SIZE = 2 * 1024 * 1024 * 1024
+# Size limit for universal hosts (default 2 GB)
+MAX_SIZE = env_int("UNIVERSAL_MAX_SIZE_MB", 2048) * 1024 * 1024
 
 
 def _cleanup_files(*paths):
@@ -47,10 +49,20 @@ async def process_universal(event, url: str, bot) -> None:
     5-phase pipeline for universal DL platforms.
     Same structure as process_terabox_experimental / process_diskwala.
     """
+    if shutting_down.is_set():
+        await _safe_send(event.respond, "🛑 Bot is restarting — please try again in a minute.")
+        return
+
     chat_id = event.chat_id
     task_key = (chat_id, url)
 
-    # ── Duplicate rejection ───────────────────────────────────────────────
+    # Per-user retry budget
+    blocked = rate_limit.check_rate_limit(chat_id)
+    if blocked:
+        await _safe_send(event.respond, blocked)
+        return
+
+    # ── Duplicate rejection ───────────────────────────────────────────────────────────────
     with _lock:
         if task_key in _active_tasks and not _active_tasks[task_key].is_set():
             await _safe_send(event.reply, "⚠️ This link is already being processed.")
@@ -62,14 +74,15 @@ async def process_universal(event, url: str, bot) -> None:
     filepath = None
 
     try:
-        # ── Phase 1: Cache lookup (placeholder for future) ────────────────
+        # ── Phase 1: Cache lookup (placeholder for future) ────────────────────────────────
 
-        # ── Phase 2: Metadata fetch ───────────────────────────────────────
+        # ── Phase 2: Metadata fetch ─────────────────────────────────────────────────────────——
         status_msg = await _safe_send(event.respond, "🔍 Resolving link...")
 
         try:
             info = await asyncio.to_thread(resolve_universal, url)
         except UniversalDL as e:
+            rate_limit.register_failure(chat_id)
             await _safe_send(status_msg.edit, f"❌ Resolution failed: {e}")
             return
 
@@ -85,7 +98,10 @@ async def process_universal(event, url: str, bot) -> None:
         # Size check
         if filesize and filesize > MAX_SIZE:
             size_mb = filesize / (1024 * 1024)
-            await _safe_send(status_msg.edit, f"❌ File too large: {size_mb:.1f} MB (limit 2 GB)")
+            await _safe_send(
+                status_msg.edit,
+                f"❌ File too large: {size_mb:.1f} MB (limit {MAX_SIZE // (1024*1024)} MB)",
+            )
             return
 
         # Status update with file info
@@ -95,7 +111,7 @@ async def process_universal(event, url: str, bot) -> None:
             f"📦 {filename}\n📐 Size: {size_str}\n\n⬇️ Downloading... 0%"
         )
 
-        # ── Phase 3: Download ─────────────────────────────────────────────
+        # ── Phase 3: Download ─────────────────────────────────────────────────────────────────
         download_start = time.time()
 
         filepath = await asyncio.to_thread(
@@ -103,6 +119,7 @@ async def process_universal(event, url: str, bot) -> None:
         )
 
         if not filepath:
+            rate_limit.register_failure(chat_id)
             await _safe_send(status_msg.edit, "❌ Download failed — no file produced.")
             return
 
@@ -115,7 +132,7 @@ async def process_universal(event, url: str, bot) -> None:
             f"📦 {filename}\n📐 Size: {actual_size / (1024*1024):.1f} MB\n\n⬆️ Uploading..."
         )
 
-        # ── Phase 4: Upload to storage group (cache for future) ───────────
+        # ── Phase 4: Upload to storage group (cache for future) ─────────────────────────——
         storage_msg = None
         if STORAGE_GROUP_ID:
             try:
@@ -128,7 +145,7 @@ async def process_universal(event, url: str, bot) -> None:
                 logger.warning(f"Storage upload failed (non-fatal): {e}")
                 storage_msg = None
 
-        # ── Phase 5: Deliver to user ──────────────────────────────────────
+        # ── Phase 5: Deliver to user ─────────────────────────────────────────────────────────—
         if storage_msg:
             await bot.send_file(chat_id, storage_msg.media, caption=f"✅ {filename}")
         else:
@@ -138,19 +155,21 @@ async def process_universal(event, url: str, bot) -> None:
             )
 
         await _safe_send(status_msg.edit, f"✅ {filename} — delivered!")
+        rate_limit.register_success(chat_id)
         logger.info(f"Delivered {filename} to {chat_id} in {time.time() - download_start:.1f}s")
 
     except asyncio.CancelledError:
         logger.info(f"Task cancelled: {task_key}")
     except Exception as e:
         logger.error(f"Universal DL error for {url}: {e}", exc_info=True)
+        rate_limit.register_failure(chat_id)
         if status_msg:
             await _safe_send(status_msg.edit, f"❌ Error: {e}")
     finally:
         with _lock:
             _active_tasks.pop(task_key, None)
         if filepath and os.path.exists(filepath):
-            asyncio.get_event_loop().run_in_executor(None, _cleanup_files, filepath)
+            await asyncio.to_thread(_cleanup_files, filepath)
 
 
 def _download_file(url: str, filename: str, headers: dict, cancel_event: threading.Event) -> str | None:
