@@ -91,7 +91,7 @@ t, q = parse_quality("https://terabox.com/s/1abc 240p extra")
 check("non-trailing token ignored", q == DEFAULT_QUALITY)
 
 
-# ── 3. Size limit & batch cap ─────────────────────────────────────────————————
+# ── 3. Size limit & batch cap ─────────────────────────────────————————————————
 group("Size limit & batch cap")
 import telegram_logic.helpers as H
 
@@ -110,7 +110,7 @@ check("over cap truncated", kept == ["a", "b", "c"] and dropped == 2)
 H.MAX_LINKS_PER_MESSAGE = 5
 
 
-# ── 4. Rate limiter (retry budget) ─────────────────────────────────────────———
+# ── 4. Rate limiter (retry budget) ─────────────────────────────────────———
 group("Retry budget")
 from telegram_logic import rate_limit as RL
 
@@ -145,7 +145,7 @@ st = RL.stats()
 check("stats snapshot shape", {"tracked_users_with_failures", "currently_blocked"} <= set(st))
 
 
-# ── 5. Cookie pool ─────────────────────────────────────────────────────────———————
+# ── 5. Cookie pool ─────────────────────────────────———————————————————————
 group("Cookie pool rotation")
 import teraboxDL.terabox_dl as TD
 
@@ -203,7 +203,7 @@ states = h.health()
 check("health reports ok state", states == [{"index": 9, "state": "ok"}])
 
 
-# ── 6. Quality plumbing ─────────────────────────────────────────────────———————————————
+# ── 6. Quality plumbing ─────────────────────────———————————————————————
 group("Quality plumbing")
 import inspect
 sig = inspect.signature(TD.get_video_info)
@@ -216,7 +216,7 @@ check("discovery defaults AUTO_1080",
 check("_probe_quality exists", callable(TD._probe_quality))
 
 
-# ── 7. Mode migration ─────────────────────────────────────────────────————————
+# ── 7. Mode migration ─────────────────────────────────——————————————————————
 group("Legacy mode migration")
 from firebase_db import users as U
 
@@ -232,7 +232,7 @@ from telegram_logic.commands.settings import AVAILABLE_MODES
 check("'get' removed from settings modes", "get" not in AVAILABLE_MODES)
 
 
-# ── 8. Status builder & queue accessor ─────────────────────────────────———————————————————————
+# ── 8. Status builder & queue accessor ─────────———————————————————————
 group("Status & queue")
 from telegram_logic.commands.status import build_status_text
 
@@ -250,7 +250,7 @@ mq.update_flood_until(30)
 check("flood cooldown tracked", 0 < mq.flood_remaining() <= 30)
 
 
-# ── 9. Graceful shutdown drain ─────────────────────────────────────────———————————————
+# ── 9. Graceful shutdown drain ─────────———————————————————————
 group("Graceful shutdown drain")
 from telegram_logic import bot as botmod
 
@@ -283,7 +283,7 @@ async def _drain_immediate():
 asyncio.run(_drain_immediate())
 
 
-# ── 10. FastTelethon upload wiring (regression) ───────────────────────────────
+# ── 10. FastTelethon upload wiring (regression) ─——————————————————————
 # Regression: _send_partial was called with chunk_data where the part INDEX
 # belongs, so every >10MB fast upload crashed and silently fell back to the
 # slow single-stream path.
@@ -302,3 +302,28 @@ class _FakeClient:
     _sender = _FakeSender()
 
 tl_functions.upload.SaveBigFilePartRequest = lambda **kw: type("R", (), kw)()
+
+async def _fake_upload():
+    payload = os.urandom(FU.CHUNK_SIZE * 3 + 1234)  # 4 parts, last partial
+    tmp = "/tmp/opencode/fastup_test.bin"
+    with open(tmp, "wb") as f:
+        f.write(payload)
+    captured_parts.clear()
+    result = await FU.upload_file_fast(_FakeClient(), tmp)
+    return result, len(payload)
+
+loop = asyncio.new_event_loop()
+res, total_size = loop.run_until_complete(_fake_upload())
+expected_parts = -(-total_size // FU.CHUNK_SIZE)
+# Parts arrive in COMPLETION order (parallel senders) — that's fine, each
+# request carries its own file_part index. Assert each index sent exactly once.
+check("all parts sent exactly once",
+      sorted(captured_parts) == list(range(expected_parts)),
+      f"got {sorted(captured_parts)}, expected {list(range(expected_parts))}")
+check("InputFileBig parts count", res.parts == expected_parts)
+tl_functions.upload.SaveBigFilePartRequest = real_save
+
+# ── Summary ─────────────────────────────────———————————————————————
+print(f"\n{'=' * 54}")
+print(f"Results: {PASS} passed, {FAIL} failed")
+sys.exit(1 if FAIL else 0)
