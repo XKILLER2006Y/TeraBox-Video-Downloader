@@ -29,7 +29,7 @@ _TERABOX_EXP_DOMAINS = (
     "terabox.com", "1024terabox.com", "teraboxapp.com", "freeterabox.com",
     "terabox.app", "terabox.fun", "4funbox.co", "4funbox.com",
     "mirrobox.com", "nephobox.com", "1024tera.com", "momerybox.com",
-    "tibibox.com",
+    "tibibox.com", "terasharefile.com",
 )
 # Longest-first so e.g. "4funbox.com" is preferred over the "4funbox.co" prefix.
 _TERABOX_EXP_DOMAIN_ALT = "|".join(
@@ -55,7 +55,10 @@ def extract_surl(text: str) -> str | None:
     """Extract the first SURL from a TeraBox URL in the message text."""
     m = TERA_URL_RE.search(text)
     if m:
-        return m.group("surl_path") or m.group("surl_param")
+        surl = m.group("surl_path") or m.group("surl_param")
+        if surl and "terasharefile.com" in text.lower() and surl[0] != "1":
+            surl = "1" + surl
+        return surl
     return None
 
 def extract_all_terabox_url(text: str) -> list[str]:
@@ -71,11 +74,24 @@ def extract_all_terabox_url(text: str) -> list[str]:
 
 
 def extract_surl_exp(text: str) -> str | None:
-    """Extract the first SURL from an experimental-mode (/exp, /exphd) TeraBox URL."""
+    """Extract the first SURL from an experimental-mode (/exp, /exphd) TeraBox URL.
+
+    Domain-aware: the path hash on terasharefile.com does NOT have an extra
+    leading "1" prefix (unlike 1024terabox.com / 1024tera.com / terabox.com).
+    The regex strips the leading "1" from all domains; for terasharefile.com
+    we restore it so the API receives the correct shorturl (errno 105 fix).
+    """
     m = TERA_EXP_URL_RE.search(text)
-    if m:
-        return m.group("surl_path") or m.group("surl_param")
-    return None
+    if not m:
+        return None
+    surl = m.group("surl_path") or m.group("surl_param")
+    if not surl:
+        return None
+    # terasharefile.com paths embed the full shorturl — the regex stripped
+    # a leading "1" that was part of the real shorturl (not a prefix).
+    if "terasharefile.com" in text.lower() and surl[0] != "1":
+        surl = "1" + surl
+    return surl
 
 
 def extract_all_terabox_url_exp(text: str) -> list[str]:

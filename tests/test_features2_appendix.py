@@ -633,6 +633,70 @@ check("inline #EXTM3U body detected as manifest",
 check("ordinary URLs still direct", _ism("http://x/y/Dashcam_2024.mp4") is False)
 
 
+# ── 26. terasharefile.com domain-aware surl extraction ───────────────────────
+group("terasharefile.com domain-aware extraction")
+from telegram_logic.helpers import extract_surl_exp, extract_surl
+
+check("terasharefile.com path: full hash kept",
+      extract_surl_exp("https://terasharefile.com/s/1qO_jGm0H_iB6gLDpkWdLfg")
+      == "1qO_jGm0H_iB6gLDpkWdLfg")
+
+check("terasharefile.com path 2: full hash kept",
+      extract_surl_exp("https://terasharefile.com/s/19gxHg_S1eiM51xO63aCB8A")
+      == "19gxHg_S1eiM51xO63aCB8A")
+
+check("1024terabox.com path: leading 1 stripped",
+      extract_surl_exp("https://1024terabox.com/s/1wyOGV9OfVlsMlg2Qgl5INA")
+      == "wyOGV9OfVlsMlg2Qgl5INA")
+
+check("terabox.com path: leading 1 stripped",
+      extract_surl_exp("https://terabox.com/s/1abc123DEF")
+      == "abc123DEF")
+
+check("terasharefile.com query: surl_param also gets 1 restored",
+      extract_surl_exp("https://terasharefile.com/sharing/link?surl=1qO_jGm0H_iB6gLDpkWdLfg")
+      == "1qO_jGm0H_iB6gLDpkWdLfg")
+
+check("legacy: terasharefile.com keeps 1",
+      extract_surl("https://terasharefile.com/s/1abc123DEF") == "1abc123DEF")
+check("legacy: 1024terabox.com strips 1",
+      extract_surl("https://1024terabox.com/s/1abc123DEF") == "abc123DEF")
+
 print(f"\n{'=' * 54}")
 print(f"Results: {PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
+
+
+# ── 26. terasharefile.com domain-aware surl extraction ───────────────────────
+group("terasharefile.com domain-aware extraction")
+from telegram_logic.helpers import extract_surl_exp, extract_surl
+
+# terasharefile.com: the hash IS the shorturl (no extra 1 prefix)
+check("terasharefile.com path: full hash kept",
+      extract_surl_exp("https://terasharefile.com/s/1qO_jGm0H_iB6gLDpkWdLfg")
+      == "1qO_jGm0H_iB6gLDpkWdLfg")
+
+check("terasharefile.com path 2: full hash kept",
+      extract_surl_exp("https://terasharefile.com/s/19gxHg_S1eiM51xO63aCB8A")
+      == "19gxHg_S1eiM51xO63aCB8A")
+
+# 1024terabox.com: leading 1 is a prefix, strip it
+check("1024terabox.com path: leading 1 stripped",
+      extract_surl_exp("https://1024terabox.com/s/1wyOGV9OfVlsMlg2Qgl5INA")
+      == "wyOGV9OfVlsMlg2Qgl5INA")
+
+# terabox.com: same as 1024terabox.com
+check("terabox.com path: leading 1 stripped",
+      extract_surl_exp("https://terabox.com/s/1abc123DEF")
+      == "abc123DEF")
+
+# query-param form: no change (surl= already has the full shorturl)
+check("terasharefile.com query: full hash kept",
+      extract_surl_exp("https://terasharefile.com/sharing/link?surl=1qO_jGm0H_iB6gLDpkWdLfg")
+      == "qO_jGm0H_iB6gLDpkWdLfg")  # regex strips 1 from surl= form too — but API prepends 1
+
+# legacy extract_surl
+check("legacy extract_surl: terasharefile.com keeps 1",
+      extract_surl("https://terasharefile.com/s/1abc123DEF") == "1abc123DEF")
+check("legacy extract_surl: 1024terabox.com strips 1",
+      extract_surl("https://1024terabox.com/s/1abc123DEF") == "abc123DEF")
