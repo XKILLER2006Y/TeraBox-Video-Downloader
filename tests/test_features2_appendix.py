@@ -577,6 +577,62 @@ over = _bqt(30, 20)
 check("over-limit quota renders safely", "Remaining:** 0" in over and "█" in over)
 
 
+# ── 25. Wave-11 regressions (cookie pool / brotli / quality descent) ──────────
+group("Wave-11 regressions")
+import importlib as _imp
+import teraboxDL.terabox_dl as _TD
+
+# cookie pool: numbered vars preferred over single var
+_saved = {k: os.environ.pop(k, None) for k in ("COOKIES", "COOKIES1", "COOKIES2", "COOKIES3")}
+try:
+    os.environ["COOKIES1"] = "AAA"
+    os.environ["COOKIES2"] = "BBB"
+    os.environ["COOKIES"] = "IGNORED"
+    _imp.reload(_TD)
+    check("pool: numbered COOKIES1..N preferred", len(_TD.cookie_pool) == 2)
+
+    for k in ("COOKIES1", "COOKIES2"):
+        os.environ.pop(k, None)
+    os.environ["COOKIES"] = "CCC\nDDD || EEE"
+    _imp.reload(_TD)
+    got = [c for _, c in _TD.cookie_pool._cookies]
+    check("pool: single-var fallback splits newline + ||", got == ["CCC", "DDD", "EEE"])
+
+    for k in ("COOKIES",):
+        os.environ.pop(k, None)
+    _imp.reload(_TD)
+    check("pool: zero cookies -> empty pool, no crash", len(_TD.cookie_pool) == 0)
+finally:
+    for k, v in _saved.items():
+        if v is not None:
+            os.environ[k] = v
+_imp.reload(_TD)
+
+# brotli capability gate: network.py advertises br only when importable
+import network as _net
+try:
+    import brotli as _br  # noqa: F401
+    _expect = "gzip, deflate, br"
+except ImportError:
+    _expect = "gzip, deflate"
+check("network Accept-Encoding matches brotli availability",
+      _net._ACCEPT_ENCODING == _expect, detail=f"got {_net._ACCEPT_ENCODING!r}")
+check("brotli installed in this env (requirements pin)", _expect.endswith("br"))
+
+# quality tier descent order
+from teraboxDL.terabox_dl import _get_video_metadata
+import inspect as _inspect; src = _inspect.getsource(_get_video_metadata)
+check("descent covers 1080 -> 720 -> 480",
+      all(q in src for q in ("M3U8_AUTO_1080", "M3U8_AUTO_720", "M3U8_AUTO_480"))
+      and "_TIER_ORDER" in src)
+
+# inline manifest detection (step 0)
+from teraboxDL.stream_downloader import is_streaming_manifest as _ism
+check("inline #EXTM3U body detected as manifest",
+      _ism("#EXTM3U\n#EXT-X-VERSION:3\nhttps://x/seg0.ts") is True)
+check("ordinary URLs still direct", _ism("http://x/y/Dashcam_2024.mp4") is False)
+
+
 print(f"\n{'=' * 54}")
 print(f"Results: {PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
