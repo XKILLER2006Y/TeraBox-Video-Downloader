@@ -9,7 +9,7 @@ STORAGE_GROUP_ID = env_int("STORAGE_GROUP_ID")
 
 log = ctx_logger(__name__)
 
-@bot.on(events.NewMessage(pattern="/random"))
+@bot.on(events.NewMessage(pattern=r"^/random$"))
 async def cmd_random(event):
     log.info(f"Received /random command from chat {event.chat_id}")
 

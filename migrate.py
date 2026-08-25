@@ -1,12 +1,15 @@
 import json
 import time
 import os
-from firebase_db.db import db
 from firebase_db.cache import _encode_key
+from firebase_db.db import get_db
 import logging
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+# Standalone script — safe to init Firebase at import time.
+db = get_db()
 
 def migrate_users():
     users_file = "users.json"

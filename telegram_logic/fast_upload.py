@@ -43,11 +43,15 @@ async def _send_partial(
 
 
 async def _read_chunk(f, offset, size):
-    """Read a chunk from file at offset — runs in thread pool to avoid blocking."""
+    """
+    Read a chunk at an absolute offset. Uses os.pread — a single atomic
+    syscall that never mutates the shared file position, so concurrent
+    readers can never interleave seek+read and upload bytes for the wrong
+    part index (silent corruption).
+    """
     loop = asyncio.get_running_loop()
     def _do_read():
-        f.seek(offset)
-        return f.read(size)
+        return os.pread(f.fileno(), size, offset)
     return await loop.run_in_executor(None, _do_read)
 
 

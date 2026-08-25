@@ -46,6 +46,12 @@ class MessageQueue:
                     log.info(f"[Queue Monitor] Items in queue: {qsize}")
             await asyncio.sleep(10)
 
+    async def ensure_worker(self) -> None:
+        """Start worker/monitor outside any request context so contextvars
+        from whichever request happens to enqueue first are NOT baked into
+        the long-lived worker task's copied context."""
+        await self._ensure_queue_worker()
+
     async def put(self, process_callable, event, url: str, *args):
         await self._ensure_queue_worker()
         await self._queue.put((process_callable, event, url, args))

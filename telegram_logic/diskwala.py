@@ -103,22 +103,7 @@ async def _dw_helper(event, diskwala_url: str) -> None:
     is_admin = bool(ADMIN_ID and chat_id == ADMIN_ID)
     total_start = time.time()
 
-    # Reject duplicate concurrent requests for the same link from this chat —
-    # a second registration would orphan the first task's cancel event.
-    existing = active_tasks.get(task_key)
-    if existing is not None and not existing.is_set():
-        await _safe_send(event.respond, f"⚠️ `{link_id}` is already being processed. Use the ❌ button on that message to cancel it first.")
-        return
-
-    cancel_event = threading.Event()
-    active_tasks[task_key] = cancel_event
-
-    if not acquire_user_slot(chat_id, is_admin):
-        await _safe_send(event.respond,
-            f"⏳ You already have **{USER_MAX_CONCURRENT}** download(s) running. "
-            "Wait for them to finish first.")
-        return
-
+    # Guards live inside the try so every denial cleans up via finally.
     cancel_btn = [[Button.inline("❌ Cancel", data=f"cancel:{link_id}")]]
 
     def _cleanup_files(*paths):
@@ -131,7 +116,21 @@ async def _dw_helper(event, diskwala_url: str) -> None:
                 except Exception as e:
                     log.warning(f"Could not clean up {p}: {e}")
 
+    cancel_event = threading.Event()
     try:
+        existing = active_tasks.get(task_key)
+        if existing is not None and not existing.is_set():
+            await _safe_send(event.respond, f"⚠️ `{link_id}` is already being processed. Use the ❌ button on that message to cancel it first.")
+            return
+
+        if not acquire_user_slot(chat_id, is_admin):
+            await _safe_send(event.respond,
+                f"⏳ You already have **{USER_MAX_CONCURRENT}** download(s) running. "
+                "Wait for them to finish first.")
+            return
+
+        active_tasks[task_key] = cancel_event
+
         # — Phase 1: Cache lookup ——————————————————————————————————————————————————————————————
         status = await _safe_send(event.respond, f"🔍 Checking cache for `{link_id}`…")
 
@@ -290,7 +289,6 @@ async def _dw_helper(event, diskwala_url: str) -> None:
             try:
                 sent_video = await _safe_send(
                     bot.send_file,
-                                bot.send_file,
                     chat_id,
                     storage_msg.media,
                     caption=_build_caption(dl_time, up_time, total_time),
@@ -349,6 +347,8 @@ async def _dw_helper(event, diskwala_url: str) -> None:
                 await _safe_send(status.edit, f"❌ Upload failed: {e}")
                 return
 
+        file_size = os.path.getsize(filepath) if filepath and os.path.exists(filepath) else 0
+
         for f_path in (filepath, os.path.splitext(filepath)[0] + ".ts"):
             if os.path.exists(f_path):
                 try:
@@ -358,7 +358,6 @@ async def _dw_helper(event, diskwala_url: str) -> None:
                     log.warning(f"Could not delete local file {f_path}: {e}")
 
         rate_limit.register_success(chat_id)
-        file_size = os.path.getsize(filepath) if filepath and os.path.exists(filepath) else 0
         stats_ok(file_size)
         await asyncio.to_thread(record_history, chat_id, filename, link_id, file_size)
         await asyncio.to_thread(bump_today, chat_id)

@@ -30,12 +30,10 @@ class DoodNotFound(DoodError):
 
 
 _DOOD_RE = re.compile(
-    r'https?://(?:www\.)?(?:dood\.watch|dood\.wf|dood\.re|dood\.to|dood\.pm|'
-    r'dood\.ws|dood\.so|dood\.pro|doodstream\.com|doodstream\.co|'
-    r'poystd\.com|lolalytics\.com|d0o0d\.com|dewdew\.xyz|'
-    r'iframe\.fafm\.xyz|tithus\.xyz|yswtg\.xyz|'
-    r'k2s\.cc|bayfiles\.com|megaup\.net|letsupload\.io|'
-    r'streamtape\.com|fsmost\.com|canvas\.garden)'
+    # Dood family only — foreign hosts (streamtape etc.) hijacked routing
+    # away from their own resolvers and never actually worked here.
+    r'https?://(?:www\.)?(?:dood\.(?:watch|wf|re|to|pm|ws|so|pro)|'
+    r'dood(?:stream)?\.(?:com|co))'
     r'/(?:d|e|embed)/([A-Za-z0-9]+)',
     re.I,
 )

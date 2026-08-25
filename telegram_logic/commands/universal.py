@@ -12,7 +12,7 @@ from telegram_logic.bot import bot
 logger = logging.getLogger(__name__)
 
 
-@bot.on(events.NewMessage(pattern=r"/dl(?:@\S+)?\s+(.+)"))
+@bot.on(events.NewMessage(pattern=r"^/dl(?:@\S+)?(?:\s+(.+))?$"))
 async def handle_dl(event):
     """Handle /dl <url> — universal download command."""
     from telegram_logic.universal import process_universal

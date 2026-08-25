@@ -106,22 +106,9 @@ async def helper(event, terabox_url: str, is_hd: bool, quality: str = DEFAULT_QU
     total_start = time.time()
     is_admin = bool(ADMIN_ID and chat_id == ADMIN_ID)
 
-    # Reject duplicate concurrent requests for the same link from this chat —
-    # a second registration would orphan the first task's cancel event.
-    existing = active_tasks.get(task_key)
-    if existing is not None and not existing.is_set():
-        await _safe_send(event.respond, f"⚠️ `{surl}` is already being processed. Use the ❌ button on that message to cancel it first.")
-        return
-
-    cancel_event = threading.Event()
-    active_tasks[task_key] = cancel_event
-
-    if not acquire_user_slot(chat_id, is_admin):
-        await _safe_send(event.respond,
-            f"⏳ You already have **{USER_MAX_CONCURRENT}** download(s) running. "
-            "Wait for them to finish first (or they'll finish on their own).")
-        return
-
+    # NOTE: duplicate-guard, slot acquisition and active_tasks registration all
+    # live inside the guarded region below so EVERY early return hits the
+    # finally that pops active_tasks — a denial can never poison the map.
     cancel_btn = [[Button.inline("❌ Cancel", data=f"cancel:{cache_key}")]]
 
     def _cleanup_files(*paths):
@@ -142,11 +129,26 @@ async def helper(event, terabox_url: str, is_hd: bool, quality: str = DEFAULT_QU
                  m3u8_tmp]
         _cleanup_files(*paths)
 
+    cancel_event = threading.Event()
     try:
-        # — Phase 1: Cache lookup ——————————————————————————————————————————————————————————————
-        status = await _safe_send(event.respond, f"🔍 Checking cache for `{surl}`…")
+        # Duplicate concurrent request guard (inside try so denials clean up)
+        existing = active_tasks.get(task_key)
+        if existing is not None and not existing.is_set():
+            await _safe_send(event.respond, f"⚠️ `{surl}` is already being processed. Use the ❌ button on that message to cancel it first.")
+            return
 
-        cached_msg = await _find_cached_video(surl, user_mode)
+        if not acquire_user_slot(chat_id, is_admin):
+            await _safe_send(event.respond,
+                f"⏳ You already have **{USER_MAX_CONCURRENT}** download(s) running. "
+                "Wait for them to finish first (or they'll finish on their own).")
+            return
+
+        active_tasks[task_key] = cancel_event
+
+        # — Phase 1: Cache lookup ——————————————————————————————————————————————————————————————
+        status = await _safe_send(event.respond, f"🔍 Checking cache for `{cache_key}`…")
+
+        cached_msg = await _find_cached_video(cache_key, user_mode)
         if cached_msg is not None:
             try:
                 f = cached_msg.file
@@ -300,7 +302,7 @@ async def helper(event, terabox_url: str, is_hd: bool, quality: str = DEFAULT_QU
                 try:
                     storage_msg = await _cancellable(_upload_to_storage(input_file, filename), cancel_event)
                     if storage_msg is not None:
-                        await asyncio.to_thread(add_to_cache, surl, storage_msg.id, user_mode)
+                        await asyncio.to_thread(add_to_cache, cache_key, storage_msg.id, user_mode)
                 except Exception as e:
                     # Keep input_file — the handle is still valid for direct delivery
                     log.error(f"Storage send failed (pre-upload kept) for surl={surl}: {e}")
@@ -390,9 +392,9 @@ async def helper(event, terabox_url: str, is_hd: bool, quality: str = DEFAULT_QU
                 await _safe_send(status.edit, f"❌ Upload failed: {e}\n\nYou can try different *mode* to download.\nSwitch *mode* from /settings")
                 return
 
+        file_size = os.path.getsize(filepath) if filepath and os.path.exists(filepath) else 0
         _cleanup_all(filepath)
         rate_limit.register_success(chat_id)
-        file_size = os.path.getsize(filepath) if filepath and os.path.exists(filepath) else 0
         stats_ok(file_size)
         await asyncio.to_thread(record_history, chat_id, filename, cache_key, file_size)
         await asyncio.to_thread(bump_today, chat_id)

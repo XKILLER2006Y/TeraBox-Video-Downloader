@@ -1,4 +1,5 @@
 from telethon import events
+import types
 from ..bot import bot
 from ..helpers import parse_comp_flag,  extract_all_terabox_url_exp, parse_quality, cap_links, DEFAULT_QUALITY
 from ..terabox_exp import process_terabox_experimental, _b64d
@@ -83,6 +84,22 @@ async def cmd_get_exp_hd(event):
 
 # ── Multi-file share picker callbacks ──────────────────────────────────────────
 
+class _CbEventShim:
+    """
+    CallbackQuery events lack `.message` (Telethon v1), but the download
+    pipeline dereferences `event.message.id` for reply threading. Wrap the
+    callback event and synthesize it from `message_id`.
+    """
+
+    def __init__(self, ev):
+        self._ev = ev
+        mid = getattr(ev, "message_id", None)
+        self.message = types.SimpleNamespace(id=mid) if mid else None
+
+    def __getattr__(self, name):
+        return getattr(self._ev, name)
+
+
 @bot.on(events.CallbackQuery(pattern=b"tpick:(.+)"))
 async def cb_tpick(event):
     raw = event.pattern_match.group(1).decode()
@@ -95,7 +112,7 @@ async def cb_tpick(event):
         return
     await event.answer("Starting download…")
     url = f"https://1024tera.com/s/1{surl}"
-    await process_terabox_experimental(event, url, quality=DEFAULT_QUALITY, fs_id=fs_id)
+    await process_terabox_experimental(_CbEventShim(event), url, quality=DEFAULT_QUALITY, fs_id=fs_id)
 
 
 @bot.on(events.CallbackQuery(pattern=b"tpickall:(.+)"))
@@ -125,4 +142,4 @@ async def cb_tpickall(event):
 
     await event.respond(f"⬇️ Queuing **{len(videos)}** video(s)…")
     for f in videos:
-        await process_terabox_experimental(event, url, quality=DEFAULT_QUALITY, fs_id=f["fs_id"])
+        await process_terabox_experimental(_CbEventShim(event), url, quality=DEFAULT_QUALITY, fs_id=f["fs_id"])

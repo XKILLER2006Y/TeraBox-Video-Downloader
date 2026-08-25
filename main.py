@@ -199,6 +199,10 @@ async def run_bot() -> None:
 
     await bot.start(bot_token=BOT_TOKEN)
 
+    # Start flood-queue worker before any traffic so it never inherits
+    # the first request's logging context.
+    await telegram_logic_bot.terabox_queue.ensure_worker()
+
     # Validate the storage group is reachable — a fresh bot session cannot
     # resolve peers it has never seen, which silently disables caching and
     # wastes a full pre-upload on every request before failing over.

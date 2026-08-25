@@ -47,7 +47,7 @@ async def inline_handler(event):
             description="Paste a share-link after my username",
             text=(
                 "**TeraBox Downloader**\n\n"
-                "Type `@bot <link>` with any TeraBox/Diskwala share link "
+                "Type `@bot <link>` with a TeraBox share link "
                 "and select the result to download it here."
             ),
         )]

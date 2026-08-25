@@ -22,11 +22,16 @@ from telegram_logic.bot import (
 )
 from telegram_logic import rate_limit
 from telegram_logic.helpers import env_int
+from telegram_logic.helpers import AUTO_COMPRESS_THRESHOLD_MB  # noqa: F401 (future use)
 from firebase_db.stats import record_success as stats_ok, record_failure as stats_fail
+from firebase_db.users import record_history, bump_today
 from universalDL import resolve_universal, UniversalDL
 from network import get_session
 
 logger = logging.getLogger(__name__)
+
+ADMIN_ID = env_int("ADMIN_ID")
+DAILY_LIMIT_PER_USER = env_int("DAILY_LIMIT_PER_USER", 0)
 
 # Active tasks for duplicate-request rejection
 _active_tasks: dict[tuple[int, str], threading.Event] = {}
@@ -64,23 +69,23 @@ async def process_universal(event, url: str, bot) -> None:
         await _safe_send(event.respond, blocked)
         return
 
-    # Per-user concurrency cap (admins exempt via bot.py check)
-    if not acquire_user_slot(chat_id):
-        await _safe_send(event.respond, "⏳ You already have downloads running — wait for them to finish.")
-        return
-
-    # ── Duplicate rejection ───────────────────────────────────────────────────────────────
-    with _lock:
-        if task_key in _active_tasks and not _active_tasks[task_key].is_set():
-            await _safe_send(event.reply, "⚠️ This link is already being processed.")
-            return
-        cancel_event = threading.Event()
-        _active_tasks[task_key] = cancel_event
-
     status_msg = None
     filepath = None
+    cancel_event = threading.Event()
+    is_admin = bool(ADMIN_ID and chat_id == ADMIN_ID)
 
     try:
+        # Guards inside try: every denial path flows through the finally that
+        # releases the slot — a duplicate can no longer burn concurrency slots.
+        if not acquire_user_slot(chat_id, is_admin=is_admin):
+            await _safe_send(event.respond, "⏳ You already have downloads running — wait for them to finish.")
+            return
+
+        with _lock:
+            if task_key in _active_tasks and not _active_tasks[task_key].is_set():
+                await _safe_send(event.reply, "⚠️ This link is already being processed.")
+                return
+            _active_tasks[task_key] = cancel_event
         # ── Phase 1: Cache lookup (placeholder for future) ────────────────────────────────
 
         # ── Phase 2: Metadata fetch ─────────────────────────────────────────────────————————
@@ -159,21 +164,30 @@ async def process_universal(event, url: str, bot) -> None:
             await bot.send_file(chat_id, storage_msg.media, caption=f"✅ {filename}")
         else:
             await asyncio.wait_for(
-                bot.send_file(chat_id, filepath, caption=f"✅ {filename}", force_document=True),
+                bot.send_file(chat_id, filepath,
+                              caption=f"✅ {filename}", force_document=True),
                 timeout=300,
             )
 
         await _safe_send(status_msg.edit, f"✅ {filename} — delivered!")
         rate_limit.register_success(chat_id)
         stats_ok(actual_size)
+        await asyncio.to_thread(record_history, chat_id, filename, url, actual_size)
+        await asyncio.to_thread(bump_today, chat_id)
         logger.info(f"Delivered {filename} to {chat_id} in {time.time() - download_start:.1f}s")
 
     except asyncio.CancelledError:
         logger.info(f"Task cancelled: {task_key}")
+        if filepath and os.path.exists(filepath):
+            await asyncio.to_thread(_cleanup_files, filepath)
     except Exception as e:
-        logger.error(f"Universal DL error for {url}: {e}", exc_info=True)
-        rate_limit.register_failure(chat_id)
-        stats_fail()
+        if cancel_event.is_set():
+            logger.info(f"Cancelled mid-flight: {task_key}")
+            await _safe_send(event.respond, "🚫 Cancelled.")
+        else:
+            logger.error(f"Universal DL error for {url}: {e}", exc_info=True)
+            rate_limit.register_failure(chat_id)
+            stats_fail()
         if status_msg:
             await _safe_send(status_msg.edit, f"❌ Error: {e}")
     finally:
@@ -193,7 +207,8 @@ def _download_file(url: str, filename: str, headers: dict, cancel_event: threadi
     safe_name = "".join(c for c in filename if c.isalnum() or c in "._- ").strip()
     if not safe_name:
         safe_name = "download"
-    filepath = os.path.join(dl_dir, safe_name)
+    unique = f"{int(time.time() * 1000) % 10_000_000_000}_{safe_name}"
+    filepath = os.path.join(dl_dir, unique)
 
     max_retries = 3
     for attempt in range(max_retries):
@@ -209,6 +224,8 @@ def _download_file(url: str, filename: str, headers: dict, cancel_event: threadi
                 for chunk in resp.iter_content(chunk_size=1024 * 1024):
                     if cancel_event.is_set():
                         logger.info("Download cancelled")
+                        resp.close()
+                        os.remove(filepath)
                         return None
                     if chunk:
                         f.write(chunk)

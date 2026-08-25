@@ -6,7 +6,9 @@ resolve → download → ffmpeg convert → send audio directly.
 """
 import asyncio
 import os
+import tempfile
 import threading
+import time
 import subprocess
 
 from telethon import events
@@ -27,26 +29,40 @@ log = ctx_logger(__name__)
 ADMIN_ID = env_int("ADMIN_ID")
 
 
-def _convert_to_mp3(mp4_path: str, kbps: int | None = None) -> str:
-    """ffmpeg video -> mp3. Explicit -b:a when kbps given, else V5 (~130k)."""
+def _convert_to_mp3(mp4_path: str, kbps: int | None = None,
+                    cancel_event: threading.Event | None = None) -> str:
+    """ffmpeg video -> mp3. Explicit -b:a when kbps given, else V5 (~130k).
+    Polls cancel_event so /cancel and shutdown drain can abort mid-encode."""
     mp3_path = os.path.splitext(mp4_path)[0] + ".mp3"
     audio_args = ["-b:a", f"{kbps}k"] if kbps else ["-q:a", "5"]
+    cmd = [
+        "ffmpeg", "-y", "-loglevel", "error", "-nostdin",
+        "-i", mp4_path,
+        "-vn", "-acodec", "libmp3lame", *audio_args,
+        mp3_path,
+    ]
+    err_file = tempfile.TemporaryFile(mode="w+", encoding="utf-8")
     try:
-        proc = subprocess.run(
-            [
-                "ffmpeg", "-y", "-loglevel", "error",
-                "-i", mp4_path,
-                "-vn", "-acodec", "libmp3lame", *audio_args,
-                mp3_path,
-            ],
-            capture_output=True, text=True, timeout=1800,
-        )
-    except subprocess.TimeoutExpired as e:
-        raise TeraBoxError("Audio conversion timed out — the video may be too long.") from e
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=err_file)
     except FileNotFoundError as e:
         raise TeraBoxError("ffmpeg is not available on this server.") from e
 
-    if proc.returncode != 0 or not os.path.exists(mp3_path) or os.path.getsize(mp3_path) < 1024:
+    while True:
+        ret = proc.poll()
+        if ret is not None:
+            break
+        if cancel_event is not None and cancel_event.is_set():
+            proc.kill()
+            proc.wait()
+            err_file.close()
+            if os.path.exists(mp3_path):
+                os.remove(mp3_path)
+            raise CancelledError("Download cancelled")
+        time.sleep(0.5)
+
+    if ret != 0 or not os.path.exists(mp3_path) or os.path.getsize(mp3_path) < 1024:
+        err_file.seek(0)
+        detail = err_file.read().strip().splitlines()[-1:] or ["unknown error"]
         detail = (proc.stderr or "").strip().splitlines()[-1:] or ["unknown error"]
         raise TeraBoxError(f"Audio conversion failed: {detail[0][:120]}")
     return mp3_path
@@ -91,7 +107,7 @@ async def cmd_mp3(event):
 
     task_key = f"mp3-{chat_id}-{rid}"
     cancel_event = threading.Event()
-    active_tasks[task_key] = {"cancel": cancel_event, "chat_id": chat_id}
+    active_tasks[task_key] = cancel_event  # Event contract — drain sets it
 
     status = None
     try:
@@ -120,7 +136,7 @@ async def cmd_mp3(event):
         )
 
         await _safe_send(status.edit, "🎵 Extracting audio…")
-        mp3_path = await asyncio.to_thread(_convert_to_mp3, filepath, kbps)
+        mp3_path = await asyncio.to_thread(_convert_to_mp3, filepath, kbps, cancel_event)
 
         mp3_size = os.path.getsize(mp3_path)
         title = _strip_ext(filename)
@@ -152,7 +168,7 @@ async def cmd_mp3(event):
         _cleanup(locals().get("filepath"), locals().get("mp3_path"))
         await _safe_send(event.respond, "🚫 Download cancelled.")
         log.info("mp3 cancelled by user")
-    except (TeraBoxError, TeraBoxDirectError) as e:
+    except TeraBoxError as e:
         _cleanup(locals().get("filepath"), locals().get("mp3_path"))
         rate_limit.register_failure(chat_id)
         stats_fail()
@@ -171,6 +187,9 @@ async def cmd_mp3(event):
 
 def _cleanup(*paths: str | None) -> None:
     from pathlib import Path as _P
+    paths = list(paths) + [
+        os.path.splitext(p)[0] + ".ts" for p in paths if p
+    ]  # HLS remux twin
     for p in paths:
         if p and os.path.exists(p):
             try:

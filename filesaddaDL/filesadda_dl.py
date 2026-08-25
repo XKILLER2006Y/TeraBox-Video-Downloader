@@ -44,8 +44,10 @@ class FilesAddaCaptcha(FilesAddaError):
 # ── URL patterns ──────────────────────────────────────────────────────────────
 # Matches filesadda.site/<code> and similar XFileSharing clones
 _FILEADDA_RE = re.compile(
+    # streamtape.com / filelions.to removed — they belong to their own
+    # resolvers; keeping them here hijacked those links (route order).
     r'https?://(?:filesadda\.site|file-upload\.com|oload\.info|'
-    r'streamsb\.com|streamtape\.com|filesrand\.com|filelions\.to|'
+    r'streamsb\.com|filesrand\.com|'
     r'File-Upload\.org|酷云Pan|upload-1fichier\.com)'
     r'/([A-Za-z0-9]{4,20})',
     re.IGNORECASE,
@@ -188,7 +190,7 @@ def resolve_filesadda(url: str, session: requests.Session | None = None) -> dict
     html = resp.text
 
     # Check for file-not-found indicators
-    if re.search(r'file\s+(has\s+been\s+)?removed|not\s+found|expired|deleted', html, re.I):
+    if re.search(r'file\s+(has\s+been\s+)?removed|not\s+found|expired|deleted', html[:4000], re.I):
         raise FilesAddaNotFound(f"File has been removed or expired: {url}")
 
     # Check for CAPTCHA on first page

@@ -7,7 +7,7 @@ from firebase_db.users import set_user_mode, get_user_mode
 log = ctx_logger(__name__)
 AVAILABLE_MODES = ["exp", "exphd", "dw"]
 
-@bot.on(events.NewMessage(pattern="/settings"))
+@bot.on(events.NewMessage(pattern=r"^/settings$"))
 async def cmd_settings(event):
     log.info(f"Received /settings command from chat {event.chat_id}")
     sender = await event.get_sender()

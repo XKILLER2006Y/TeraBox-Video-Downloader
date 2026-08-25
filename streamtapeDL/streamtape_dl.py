@@ -95,10 +95,17 @@ def _extract_url_from_js(html: str, page_url: str) -> str | None:
     # Method 2: iframe src pointing to streamtape
     for m in _IFRAME_SRC_RE.finditer(html):
         iframe_url = m.group(1)
-        if 'streamtape' in iframe_url or 'nothing' not in iframe_url:
+        parsed_iframe = requests.compat.urlparse(iframe_url)
+        # AND semantics: the old `A or not B` was effectively always-true and
+        # fetched arbitrary attacker-supplied URLs (SSRF probing vector).
+        # Only same-brand http(s) iframes are followed, via pooled session.
+        if (
+            parsed_iframe.scheme in ("http", "https")
+            and "streamtape" in parsed_iframe.netloc
+        ):
             # Fetch the iframe page to find the real URL
             try:
-                r = requests.get(iframe_url, headers={
+                r = get_session().get(iframe_url, headers={
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131',
                     'Referer': page_url,
                 }, timeout=15)

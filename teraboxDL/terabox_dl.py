@@ -412,6 +412,9 @@ def _discover_all_hls_chunks(
     max_known_idx = -1
     no_new_max_streak = 0
     max_retries = 100
+    # Consecutive discovery polls with nothing new before we declare the
+    # playlist complete. Small + constant so it is always reachable.
+    _DISCOVERY_STREAK = 4
     deadline = time.monotonic() + 120  # 2-minute hard limit
     
     # Request collapsing: cache responses to avoid duplicate requests
@@ -424,7 +427,8 @@ def _discover_all_hls_chunks(
         
         # Request collapsing: check if we recently fetched this URL
         now = time.time()
-        cache_key = url
+        # dp-logid is randomized per build — strip it or the cache never hits
+        cache_key = url.split("dp-logid=")[0]
         if cache_key in _response_cache:
             cached_time, cached_text = _response_cache[cache_key]
             if now - cached_time < _cache_ttl:
@@ -479,13 +483,15 @@ def _discover_all_hls_chunks(
         else:
             no_new_max_streak += 1
         
-        # Check if complete (contiguous range starting near 0)
-        if known and min(known) <= 1 and len(known) == max(known) - min(known) + 1:
-            confidence = max(10, max_known_idx)
-            if no_new_max_streak >= confidence:
+        # Check if complete (contiguous range starting at 0/1). A CONSTANT
+        # streak threshold keeps the exit reachable for any video length —
+        # the old `confidence = max(10, max_known_idx)` scaled past the
+        # 100-attempt cap, forcing every download to burn the full budget.
+        if known and min(known) <= 1 and len(known) == max(known) - min(known) + 1:  # contiguous from head
+            if no_new_max_streak >= _DISCOVERY_STREAK:
                 break
-        
-        budget = min(100, max(30, max_known_idx * 3))
+
+        budget = min(max_retries, max(30, max_known_idx * 3))
         if req_count >= budget:
             break
     

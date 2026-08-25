@@ -97,6 +97,57 @@ class _Doc2:
 class _Inc:
     def __init__(self, n): self.value = n
 
+class _DailyDoc:
+    """Per-day quota doc: uid/daily/<date>."""
+    def __init__(self, store, path): self.store, self.path = store, path
+    def get(self, fields=None):
+        data = dict(self.store.get(self.path, {}))
+
+        class S:
+            exists = bool(data)
+
+            def to_dict(self, _d=data):
+                return _d
+
+        return S()
+    def set(self, payload, merge=False):
+        doc = self.store.setdefault(self.path, {})
+        def _apply(old, v):
+            if hasattr(v, "value") and not isinstance(v, (str, bytes)):
+                return (old or 0) + v.value
+            if isinstance(v, dict):
+                base = old if isinstance(old, dict) else {}
+                return {k2: _apply(base.get(k2), v2) for k2, v2 in v.items()}
+            return v
+        for k, v in payload.items():
+            doc[k] = _apply(doc.get(k), v)
+
+class _SubCol:
+    def __init__(self, store, base): self.store, self.base = store, base
+    def document(self, day): return _DailyDoc(self.store, self.base + "/" + day)
+
+class _Doc2:
+    def __init__(self, uid): self.uid = uid
+    def get(self, fields=None):
+        return _Snap2(stored.get(self.uid, {}), self.uid in stored)
+    def set(self, payload, merge=False):
+        # emulate Firestore: Increment(x) applied on merge
+        doc = stored.setdefault(self.uid, {})
+        def _apply(old, v):
+            if hasattr(v, "value") and not isinstance(v, (str, bytes)):
+                return (old or 0) + v.value
+            if isinstance(v, dict):
+                base = old if isinstance(old, dict) else {}
+                return {k2: _apply(base.get(k2, 0), v2) for k2, v2 in v.items()}
+            return v
+        for k, v in payload.items():
+            doc[k] = _apply(doc.get(k), v)
+    def collection(self, name):
+        return _SubCol(stored, f"{self.uid}/{name}")
+
+class _Inc:
+    def __init__(self, n): self.value = n
+
 class _Col2:
     def document(self, uid): return _Doc2(uid)
 
@@ -280,8 +331,9 @@ for _ in range(4):
 check("bump_today accumulates", U2.get_today_count(6001) == 4)
 check("users isolated in quota", U2.get_today_count(6002) == 0)
 # stale date resets
-stored.setdefault("6003", {})["daily"] = {"d": "1999-01-01", "n": 50}
-check("stale date ignored", U2.get_today_count(6003) == 0)
+# day key lives in the doc ID — an old day's doc is never read by today's count
+stored["6003/1999-01-01"] = {"n": 50}
+check("other-day docs invisible to today's count", U2.get_today_count(6003) == 0)
 
 
 # ── 21. Remux regression & queue position ─────────────────────────────────────

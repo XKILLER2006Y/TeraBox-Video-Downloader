@@ -23,7 +23,7 @@ WELCOME_MESSAGE = (
 )
 
 # A link passed as a start argument ("/start https://…") — process it right away.
-_URL_IN_START = r"^/start(?:\s+(.+))?$"
+_URL_IN_START = r"^/start(?:@\S+)?(?:\s+(.+))?$"
 
 
 @bot.on(events.NewMessage(pattern=_URL_IN_START))

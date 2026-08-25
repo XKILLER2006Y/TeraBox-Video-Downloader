@@ -74,8 +74,11 @@ def add_to_cache(surl: str, message_id: int, user_mode: MODE) -> bool:
         _bucket_ref(user_mode).set({safe_key: message_id}, merge=True)
         log.debug(f"Cache add: bucket={user_mode}, surl={surl}, msg_id={message_id}")
 
-        # Invalidate /random snapshot so it refreshes on next call
-        _RANDOM_SNAPSHOT["timestamp"] = 0.0
+        # Invalidate /random snapshot so it refreshes on next call.
+        # Under the lock: an unlocked write could be erased by a concurrent
+        # refresh finishing right after us (stale entry for a full TTL).
+        with _RANDOM_SNAPSHOT_LOCK:
+            _RANDOM_SNAPSHOT["timestamp"] = 0.0
         return True
     except Exception as e:
         log.error(f"[DB] add_to_cache failed for surl={surl}, mode={user_mode}: {e}")

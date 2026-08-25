@@ -67,8 +67,10 @@ def is_streaming_manifest(url: str) -> bool:
         return True
 
     # 2. URL path contains streaming keywords
-    streaming_keywords = ("m3u8", "hls", ".mpd", "dash")
-    if any(kw in path for kw in streaming_keywords):
+    # Word-boundary-ish matching: bare substrings like "dash" hijacked
+    # ordinary files ("Dashcam_2024.mp4") into the manifest parser.
+    import re as _re
+    if _re.search(r"\.(m3u8|mpd)(?:$|[?])|/(?:^|[/_.])(?:hls|dash)(?:[/_.]|$)", path):
         return True
 
     # 3. Probe Content-Type via HEAD request (lightweight)
