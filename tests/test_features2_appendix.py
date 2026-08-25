@@ -284,6 +284,60 @@ stored.setdefault("6003", {})["daily"] = {"d": "1999-01-01", "n": 50}
 check("stale date ignored", U2.get_today_count(6003) == 0)
 
 
+# ── 21. Remux regression & queue position ─────────────────────────────────────
+group("Remux regression / queue position")
+import shutil as _shutil
+import subprocess as _sp2
+from teraboxDL.stream_downloader import _remux_ts_to_mp4
+
+FFMPEG = _shutil.which("ffmpeg")
+check("ffmpeg present for remux regression", FFMPEG is not None)
+
+if FFMPEG:
+    ts_path = "/tmp/opencode/rm_test.ts"
+    mp4_path = "/tmp/opencode/rm_test.mp4"
+    gen = _sp2.run(
+        [FFMPEG, "-y", "-loglevel", "error", "-f", "lavfi",
+         "-i", "testsrc=size=128x96:rate=10:duration=1",
+         "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+         "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac",
+         "-mpegts_flags", "+resend_headers", ts_path],
+        capture_output=True, text=True,
+    )
+    check("synthetic mpeg-ts generated", gen.returncode == 0 and os.path.getsize(ts_path) > 1000)
+
+    ok = _remux_ts_to_mp4(ts_path, mp4_path)
+    check("remux reports success", ok is True)
+    check("mp4 exists after remux", os.path.exists(mp4_path))
+    probe = _sp2.run(
+        ["ffprobe", "-v", "quiet", "-show_entries", "format=format_name",
+         "-of", "csv=p=0", mp4_path],
+        capture_output=True, text=True,
+    )
+    fmts = {f.strip().strip('"') for f in probe.stdout.strip().split(",")}
+    check("container is genuinely MP4 (not renamed TS)",
+          bool(fmts & {"mp4", "mov", "mp4,mov"}), detail=f"got {fmts!r}")
+    check("ts source removed by remux", not os.path.exists(ts_path))
+    if os.path.exists(mp4_path):
+        os.remove(mp4_path)
+
+from telegram_logic.queue import MessageQueue
+
+mq = MessageQueue()
+check("queued_count zero before start", mq.pending == 0)
+
+
+async def _fill_queue():
+    mq._queue = __import__("asyncio").Queue()
+    for i in range(3):
+        await mq.put(lambda *a: None, None, f"u{i}")
+    return mq.pending
+
+
+n = asyncio.run(_fill_queue())
+check("pending reflects enqueued items", n == 3)
+
+
 print(f"\n{'=' * 54}")
 print(f"Results: {PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

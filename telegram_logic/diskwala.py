@@ -82,11 +82,13 @@ async def process_diskwala(event, diskwala_url: str) -> None:
         except FloodWaitError as e:
             # Pipeline hit flood → set cooldown, queue, notify user
             terabox_queue.update_flood_until(e.seconds)
+            ahead = terabox_queue.pending
             await terabox_queue.put(_dw_helper, event, diskwala_url)
             try:
+                pos = f" (position {ahead + 1})" if ahead else ""
                 await event.respond(
-                    f"⏳ Bot overloaded! Your request has been queued "
-                    f"and will be processed automatically in ~{e.seconds}s."
+                    f"⏳ Bot overloaded! Your request has been queued"
+                    f"{pos} and will be processed automatically in ~{e.seconds}s."
                 )
             except Exception:
                 pass

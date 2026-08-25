@@ -181,6 +181,36 @@ def _download_hls_segments_local(
     _download_hls_from_manifest(manifest_text, first_seg, output_file, cancel_event, progress_callback)
 
 
+def _remux_ts_to_mp4(ts_path: str, mp4_path: str) -> bool:
+    """
+    Remux an MPEG-TS file into an MP4 container without re-encoding.
+
+    Returns True on success (ts_path removed). Returns False when ffmpeg is
+    missing or fails — caller decides on fallback. Never raises.
+    """
+    ffmpeg_path = shutil.which("ffmpeg")
+    if not ffmpeg_path:
+        log.warning("ffmpeg not found — skipping remux")
+        return False
+    try:
+        result = subprocess.run(
+            [
+                ffmpeg_path, "-y", "-i", ts_path,
+                "-c", "copy", "-bsf:a", "aac_adtstoasc",
+                "-movflags", "+faststart", mp4_path,
+            ],
+            capture_output=True,
+        )
+    except OSError as e:
+        log.warning(f"ffmpeg remux failed to launch: {e}")
+        return False
+    if result.returncode == 0:
+        os.remove(ts_path)
+        return True
+    stderr = result.stderr.decode("utf-8", errors="replace")
+    log.warning(f"ffmpeg remux failed: {stderr[-300:]}")
+    return False
+
 def _download_hls_from_manifest(
     manifest_text: str,
     base_url: str,
@@ -285,22 +315,11 @@ def _download_hls_from_manifest(
         total_downloaded = os.path.getsize(ts_output)
         log.info(f"All segments downloaded: {ts_output} ({total_downloaded / 1e6:.2f} MB)")
 
-        ffmpeg_path = shutil.which("ffmpeg")
-        if ffmpeg_path and output_file.lower().endswith(".mp4"):
+        if output_file.lower().endswith(".mp4") and os.path.exists(ts_output):
             log.info("Remuxing TS -> MP4 with ffmpeg...")
-            cmd = [
-                ffmpeg_path, "-y", "-i", ts_output,
-                "-c", "copy", "-bsf:a", "aac_adtstoasc",
-                "-movflags", "+faststart", output_file,
-            ]
-            result = subprocess.run(cmd, capture_output=True)
-            if result.returncode == 0:
-                log.info(f"Remuxed to {output_file}")
-                os.remove(ts_output)
+            if _remux_ts_to_mp4(ts_output, output_file):
                 return
-            else:
-                stderr = result.stderr.decode("utf-8", errors="replace")
-                log.warning(f"ffmpeg remux failed: {stderr[-300:]}")
+            # fall through: broken/missing ffmpeg → keep TS bytes under .mp4 name
 
         if os.path.exists(ts_output):
             if os.path.exists(output_file):

@@ -61,11 +61,13 @@ async def process_terabox_experimental(
     # If currently in flood cooldown → queue immediately
     rem = terabox_queue.flood_remaining()
     if rem > 0:
+        ahead = terabox_queue.pending
         await terabox_queue.put(helper, event, terabox_url, is_hd, quality or DEFAULT_QUALITY, fs_id)
         try:
+            pos = f" (position {ahead + 1})" if ahead else ""
             await event.respond(
-                "⏳ Bot overloaded! Your request has been queued "
-                f"and will be processed automatically in ~{rem}s."
+                "⏳ Bot overloaded! Your request has been queued"
+                f"{pos} and will be processed automatically in ~{rem}s."
             )
         except FloodWaitError as e:
             terabox_queue.update_flood_until(e.seconds)
