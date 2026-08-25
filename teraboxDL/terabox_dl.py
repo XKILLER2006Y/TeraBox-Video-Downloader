@@ -689,6 +689,12 @@ def _get_video_metadata(terabox_url: str, quality: str = "M3U8_AUTO_1080", fs_id
     # Cheap single-request probe: skip straight to AUTO_1080 if the
     # requested tier isn't available, instead of burning the discovery
     # budget (100 requests / 2 min) on a dead quality.
+    #
+    # errno 130 = "quality not available". Small/low-res uploads often ONLY
+    # have a 480p transcode, so the fallback must descend ALL the way
+    # (1080 -> 720 -> 480) — the old chain stopped at 1080 and every
+    # low-quality share failed with 'Could not discover any video chunks'.
+    _TIER_ORDER = ["M3U8_AUTO_1080", "M3U8_AUTO_720", "M3U8_AUTO_480"]
     quality_to_use = quality
     if quality != "M3U8_AUTO_1080" and not _probe_quality(
         session, shareid, uk, sign, timestamp, fs_id_val, surl, cookies_str or "", quality
@@ -696,19 +702,27 @@ def _get_video_metadata(terabox_url: str, quality: str = "M3U8_AUTO_1080", fs_id
         log.warning(f"Quality {quality} probe failed for surl={surl} — using AUTO_1080")
         quality_to_use = "M3U8_AUTO_1080"
 
+    m3u8_text = None
     try:
         m3u8_text = _discover_all_hls_chunks(
             session, shareid, uk, sign, timestamp, fs_id_val, surl,
             cookies_str or "", quality=quality_to_use,
         )
     except TeraBoxDirectError:
-        if quality_to_use != "M3U8_AUTO_1080":
-            log.warning(f"Quality {quality_to_use} unavailable for surl={surl} — falling back to AUTO_1080")
-            m3u8_text = _discover_all_hls_chunks(
-                session, shareid, uk, sign, timestamp, fs_id_val, surl,
-                cookies_str or "", quality="M3U8_AUTO_1080",
-            )
-        else:
+        # descend tiers BELOW the one we tried (dedup, keep order)
+        tried_idx = _TIER_ORDER.index(quality_to_use) if quality_to_use in _TIER_ORDER else 0
+        for tier in _TIER_ORDER[tried_idx + 1:]:
+            log.warning(f"Quality {quality_to_use} unavailable (errno 130?) for surl={surl} — trying {tier}")
+            try:
+                m3u8_text = _discover_all_hls_chunks(
+                    session, shareid, uk, sign, timestamp, fs_id_val, surl,
+                    cookies_str or "", quality=tier,
+                )
+                quality_to_use = tier
+                break
+            except TeraBoxDirectError:
+                continue
+        if m3u8_text is None:
             raise
 
     # Return metadata with M3U8 text (no file path — avoids disk I/O)
