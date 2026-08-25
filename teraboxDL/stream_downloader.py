@@ -59,6 +59,13 @@ def is_streaming_manifest(url: str) -> bool:
     2. Path keywords: URL path contains 'm3u8', 'hls', or 'mpd'/'dash'
     3. Content-Type probe: HEAD request to check MIME type
     """
+    # 0. Inline manifest TEXT (get_video_info returns the m3u8 body directly
+    # to avoid disk I/O). Nothing legitimate starts with '#EXTM3U', so this
+    # is unambiguous — without it the manifest body was treated as a URL and
+    # requests exploded with 'No connection adapters'.
+    if url.lstrip().startswith("#EXTM3U"):
+        return True
+
     parsed = urlparse(url)
     path = parsed.path.lower()
 
