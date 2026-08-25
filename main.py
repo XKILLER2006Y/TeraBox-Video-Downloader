@@ -38,7 +38,7 @@ from universalDL import extract_universal_urls  # noqa: E402
 from telegram_logic.universal import process_universal  # noqa: E402
 from telegram_logic import alerts as _alerts  # noqa: E402
 from teraboxDL.terabox_dl import set_pool_exhausted_hook  # noqa: E402
-from firebase_db.users import track_user, get_user_mode  # noqa: E402
+from firebase_db.users import track_user  # noqa: E402
 
 # — Global User Tracker ———————————————————————————————————————————————————————————————————————————————————
 
@@ -76,19 +76,6 @@ STORAGE_GROUP_ID = env_int("STORAGE_GROUP_ID")
 setup_logging()
 log = ctx_logger(__name__)
 
-# — Wrong-source hints ————————————————————————————————————————————————————————————————————————
-DISKWALA_IN_TERABOX_MODE = (
-    "🔗 That looks like a **Diskwala** link, but your current mode downloads **TeraBox** videos.\n\n"
-    "➡️ Use the **/dw** command:\n`/dw <link>`\n\n"
-    "…or switch your default mode to **dw** from /settings."
-)
-
-TERABOX_IN_DISKWALA_MODE = (
-    "🔗 That looks like a **TeraBox** link, but your current mode is **dw** (Diskwala).\n\n"
-    "➡️ Use **/exp** or **/exphd**:\n`/exp <link>`\n\n"
-    "…or switch your default mode from /settings."
-)
-
 
 async def _run_batch(event, urls: list[str], processor) -> None:
     """
@@ -116,53 +103,30 @@ async def handle_message(event):
     text = event.raw_text or ""
     if text.startswith("/"):
         return  # Let command handlers deal with commands
-    
-    # Get mode based on user-id..
-    try:
-        mode = await asyncio.to_thread(get_user_mode, event.chat_id)
-    except Exception:
-        log.error("DB error fetching user mode", extra={"chat_id": event.chat_id}, exc_info=True)
-        await event.respond("⚠️ Database error. Please try again later.")
+
+    # ── Auto-detect platform and route (no mode check needed) ────────────────
+    terabox_url_list = extract_all_terabox_url_exp(text)
+    if terabox_url_list:
+        try:
+            log.info("auto-detect [terabox]", extra={"chat_id": event.chat_id, "url_count": len(terabox_url_list)})
+            await _run_batch(event, terabox_url_list, process_terabox_experimental)
+        except Exception:
+            log.error("unhandled error in handle_message", extra={"chat_id": event.chat_id}, exc_info=True)
         return
 
-    if mode == 'exp':
-        terabox_url_list = extract_all_terabox_url_exp(text)
-        if terabox_url_list:
-            try:
-                log.info("routed to exp mode", extra={"chat_id": event.chat_id, "url_count": len(terabox_url_list)})
-                await _run_batch(event, terabox_url_list, process_terabox_experimental)
-            except Exception:
-                log.error("unhandled error in handle_message", extra={"chat_id": event.chat_id}, exc_info=True)
-            return
+    diskwala_url_list = extract_all_diskwala_urls(text)
+    if diskwala_url_list:
+        try:
+            log.info("auto-detect [diskwala]", extra={"chat_id": event.chat_id, "url_count": len(diskwala_url_list)})
+            await _run_batch(event, diskwala_url_list, process_diskwala)
+        except Exception:
+            log.error("unhandled error in handle_message", extra={"chat_id": event.chat_id}, exc_info=True)
+        return
 
-    elif mode == 'exphd':
-        terabox_url_list = extract_all_terabox_url_exp(text)
-        if terabox_url_list:
-            try:
-                log.info("routed to exphd mode", extra={"chat_id": event.chat_id, "url_count": len(terabox_url_list)})
-                await _run_batch(
-                    event, terabox_url_list,
-                    lambda ev, url: process_terabox_experimental(ev, url, is_hd=True),
-                )
-            except Exception:
-                log.error("unhandled error in handle_message", extra={"chat_id": event.chat_id}, exc_info=True)
-            return
-
-    elif mode == 'dw':
-        diskwala_url_list = extract_all_diskwala_urls(text)
-        if diskwala_url_list:
-            try:
-                log.info("routed to dw mode", extra={"chat_id": event.chat_id, "url_count": len(diskwala_url_list)})
-                await _run_batch(event, diskwala_url_list, process_diskwala)
-            except Exception:
-                log.error("unhandled error in handle_message", extra={"chat_id": event.chat_id}, exc_info=True)
-            return
-
-    # ── Universal DL fallback — try all platforms if no mode-specific match ─
     universal_url_list = extract_universal_urls(text)
     if universal_url_list:
         try:
-            log.info("universal DL: processing links", extra={"chat_id": event.chat_id, "url_count": len(universal_url_list)})
+            log.info("auto-detect [universal]", extra={"chat_id": event.chat_id, "url_count": len(universal_url_list)})
             await _run_batch(event, universal_url_list, lambda ev, url: process_universal(ev, url, bot))
         except Exception:
             log.error("unhandled error in universal DL", extra={"chat_id": event.chat_id}, exc_info=True)
@@ -218,17 +182,13 @@ async def run_bot() -> None:
 
     default_commands = [ 
         BotCommand(command="start", description="Start BOT"),
-        BotCommand(command="exp", description="[Experimental] Download TeraBox video (add 720p/1080p for quality)"), 
-        BotCommand(command="exphd", description="[Experimental] Download HD TeraBox video"), 
-        BotCommand(command="dw", description="Download Diskwala video"),
-        BotCommand(command="dl", description="Download from any supported host (GoFile, StreamTape, Dood, MediaFire, etc.)"),
+        BotCommand(command="dl", description="Download from any platform (TeraBox, Diskwala, GoFile, etc.)"),
         BotCommand(command="random", description="Get a random video"),
         BotCommand(command="status", description="Bot health & stats"),
         BotCommand(command="history", description="Your recent downloads"),
         BotCommand(command="stats", description="Your download statistics"),
         BotCommand(command="quota", description="Your remaining downloads today"),
-        BotCommand(command="mp3", description="Extract audio from a TeraBox video"),
-        BotCommand(command="settings", description="View Details"),
+        BotCommand(command="mp3", description="Extract audio from a video"),
         BotCommand(command="op", description="Send feedback to admin"),
     ]
 

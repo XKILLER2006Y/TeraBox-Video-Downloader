@@ -7,18 +7,17 @@ log = ctx_logger(__name__)
 
 WELCOME_MESSAGE = (
     "🚀 **Welcome!**\n\n"
-    "⚙️ **Commands:**\n"
-    "**/exp** <link>  Reliable & Fast [Recommended]\n"
-    "**/expHD** <link>  For HD Videos [Slow]\n"
-    "**/dw** <link>  Download Diskwala video\n"
-    "**/mp3** <link>  Extract audio as MP3\n\n"
+    "📥 **Send any link** — I'll auto-detect the platform and download it.\n\n"
+    "**/dl** <link> [quality]  Download from any platform\n"
+    "  Qualities: 360p, 480p, 720p, 1080p\n"
+    "  Add **comp** to shrink the video\n\n"
+    "Supported: TeraBox, Diskwala, filesadda, GoFile, StreamTape, "
+    "Dood, MixDrop, StreamWish, FileLions, CatBox, MediaFire\n\n"
     "🎲 **/random**  Get a random video\n"
     "📊 **/stats**  Your download statistics\n"
     "🕘 **/history**  Your recent downloads\n"
-    "🔧 **/settings**  Change default mode [/exp is default]\n\n"
-    "📥 Give me **TeraBox link(s)** (paste or forward them), I'll send the videos.\n\n"
-    "💡 You can also just send a link without any command, I'll use your default setting.\n"
-    "💡 Or type `@mybot <link>` in any chat with inline mode.\n\n"
+    "🎤 **/mp3** <link>  Extract audio as MP3\n\n"
+    "💡 Just paste a link — no command needed!\n"
     "📩 Send feedback to admin using **/op** <your message>"
 )
 
