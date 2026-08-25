@@ -1,8 +1,8 @@
 from telethon import events
-import logging
 from ..bot import bot, active_tasks
+from ..structured_log import ctx_logger
 
-log = logging.getLogger(__name__)
+log = ctx_logger(__name__)
 
 @bot.on(events.CallbackQuery(pattern=rb"^cancel:"))
 async def handle_cancel(event):

@@ -1,8 +1,8 @@
 from ..bot import bot
+from ..structured_log import ctx_logger
 from telethon import events
-import logging
 
-log = logging.getLogger(__name__)
+log = ctx_logger(__name__)
 
 WELCOME_MESSAGE = (
     "🚀 **Welcome!**\n\n"

@@ -1,9 +1,9 @@
-import logging
 from telethon import events
 from ..bot import bot
 from ..helpers import env_int
+from ..structured_log import ctx_logger
 
-log = logging.getLogger(__name__)
+log = ctx_logger(__name__)
 
 ADMIN_ID = env_int("ADMIN_ID")
 

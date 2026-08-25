@@ -1,13 +1,13 @@
 import asyncio
 import random
-import logging
 from telethon import events
 from ..bot import bot
 from firebase_db.cache import get_cache_for_random
 from ..helpers import env_int
+from ..structured_log import ctx_logger
 STORAGE_GROUP_ID = env_int("STORAGE_GROUP_ID")
 
-log = logging.getLogger(__name__)
+log = ctx_logger(__name__)
 
 @bot.on(events.NewMessage(pattern="/random"))
 async def cmd_random(event):

@@ -11,11 +11,11 @@ never blocks or raises — alerting must never break a download.
 Every alert type is cooldown-throttled so a flapping problem can't spam.
 """
 import time
-import logging
 import asyncio
 import threading
+from .structured_log import ctx_logger
 
-log = logging.getLogger(__name__)
+log = ctx_logger(__name__)
 
 try:
     from .helpers import env_int

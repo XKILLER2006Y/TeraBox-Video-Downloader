@@ -2,12 +2,12 @@ import os
 import time
 import threading
 import asyncio
-import logging
 from telethon import TelegramClient
 
 from firebase_db.cache import search_in_cache
+from .structured_log import ctx_logger
 
-log = logging.getLogger(__name__)
+log = ctx_logger(__name__)
 
 from .queue import MessageQueue  # noqa: E402 — log setup first
 from .helpers import env_int  # noqa: E402

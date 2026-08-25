@@ -4,6 +4,8 @@ Offline unit tests — part 3 (stats, history, multi-file picker, thumbnails).
 Run: python tests/test_features2_appendix.py
 Exits 0 when all checks pass.
 """
+import asyncio
+import logging
 import os
 import sys
 
@@ -144,6 +146,53 @@ check("missing thumbs → empty string", _extract({}, {}) == "")
 check("junk ignored safely", _extract({}, {"thumbs": {"url": [None, 42]}}) == "")
 
 
+
+
+# ── 18. Structured logging ────────────────────────────────────────────────────
+group("Structured logging")
+import json as _json
+import tempfile as _tempfile
+from telegram_logic.structured_log import (
+    setup_logging, ctx_logger, bind_context, new_request_id, get_context,
+)
+
+check("request id is 8 hex chars",
+      len(new_request_id()) == 8 and all(c in "0123456789abcdef" for c in new_request_id()))
+
+bind_context(request_id="testrid1", user_id=777)
+check("get_context returns bound values", get_context() == {"request_id": "testrid1", "user_id": 777})
+
+with _tempfile.NamedTemporaryFile(suffix=".log", delete=False) as tf:
+    tf_path = tf.name
+setup_logging(log_file=tf_path, file_level=logging.DEBUG)
+
+slog = ctx_logger("sl-test")
+slog.info("plain message")
+slog.info("with extras", extra={"bytes": 999, "ok": True})
+rid = new_request_id()
+bind_context(request_id=rid, user_id=5555, download_id="dl1")
+slog.warning("in context")
+
+entries = [_json.loads(l) for l in open(tf_path).read().strip().split("\n")]
+check("every line is valid JSON", len(entries) >= 3)
+check("extra fields serialized", entries[1].get("bytes") == 999 and entries[1].get("ok") is True)
+check("context fields injected", entries[2].get("request_id") == rid
+      and entries[2].get("user_id") == 5555 and entries[2].get("download_id") == "dl1")
+check("level + logger + src present", all(k in entries[0] for k in ("ts", "level", "logger", "src")))
+
+
+async def _child():
+    slog.info("from child")
+
+
+asyncio.get_event_loop_policy()
+asyncio.run(_child())
+entries = [_json.loads(l) for l in open(tf_path).read().strip().split("\n")]
+check("context propagates to child tasks", any(
+    e.get("msg") == "from child" and e.get("user_id") == 5555 for e in entries))
+
+# restore default logging so later output stays clean
+setup_logging(log_file="/tmp/opencode/sl_default.log")
 print(f"\n{'=' * 54}")
 print(f"Results: {PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

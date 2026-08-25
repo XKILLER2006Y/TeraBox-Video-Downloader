@@ -1,10 +1,10 @@
 from telethon import events, Button
 import asyncio
-import logging
 from ..bot import bot
+from ..structured_log import ctx_logger
 from firebase_db.users import set_user_mode, get_user_mode
 
-log = logging.getLogger(__name__)
+log = ctx_logger(__name__)
 AVAILABLE_MODES = ["exp", "exphd", "dw"]
 
 @bot.on(events.NewMessage(pattern="/settings"))

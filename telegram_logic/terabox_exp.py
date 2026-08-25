@@ -3,7 +3,6 @@ import time
 import base64
 import threading
 import asyncio
-import logging
 import tempfile
 from telethon import Button
 from telethon.errors import FloodWaitError
@@ -15,6 +14,7 @@ from firebase_db.cache import add_to_cache
 from firebase_db.stats import record_success as stats_ok, record_failure as stats_fail
 from firebase_db.users import record_history
 from .progress_callbacks import make_download_progress_cb, make_upload_progress_cb
+from .structured_log import ctx_logger, bind_context, new_request_id
 
 from teraboxDL.errors import TeraBoxError, CancelledError, TeraBoxDirectError, TeraBoxMultipleChoice
 from teraboxDL.public_api import download_terabox_file_experimental
@@ -22,7 +22,7 @@ from teraboxDL.terabox_dl import get_video_info
 
 ADMIN_ID = env_int("ADMIN_ID")
 
-log = logging.getLogger(__name__)
+log = ctx_logger(__name__)
 
 # — Heart Function —————————————————————————————————————————————————————————————
 
@@ -34,6 +34,8 @@ async def process_terabox_experimental(
     quality: str | None = None,
     fs_id: int | None = None,
 ) -> None:
+    rid = new_request_id()
+    bind_context(request_id=rid, user_id=event.chat_id, download_id=rid)
     if shutting_down.is_set():
         await _safe_send(event.respond, "🛑 Bot is restarting — please try again in a minute.")
         return

@@ -10,13 +10,13 @@ fine for an abuse-mitigation mechanism.
 """
 import threading
 import time
-import logging
 from collections import deque
 
 from .helpers import env_int
 from . import alerts
+from .structured_log import ctx_logger
 
-log = logging.getLogger(__name__)
+log = ctx_logger(__name__)
 
 # ── Tunables (env-configurable) ─────────────────────────────────────────────────────────———————
 MAX_FAILURES = env_int("MAX_FAILURES_PER_WINDOW", 5)     # failures allowed…

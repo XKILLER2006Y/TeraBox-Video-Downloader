@@ -4,12 +4,12 @@ Data is recorded on every successful /exp, /dw and /dl delivery.
 """
 import time
 import asyncio
-import logging
 from telethon import events
 
 from ..bot import bot
+from ..structured_log import ctx_logger
 
-log = logging.getLogger(__name__)
+log = ctx_logger(__name__)
 
 
 @bot.on(events.NewMessage(pattern=r"^/history$"))

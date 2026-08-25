@@ -1,13 +1,13 @@
 import asyncio
-import logging
 import time
 from datetime import datetime, timezone, timedelta
 from telethon import events
 from ..bot import bot
 from firebase_db.users import get_all_users
 from ..helpers import env_int, format_duration
+from ..structured_log import ctx_logger
 
-log = logging.getLogger(__name__)
+log = ctx_logger(__name__)
 
 ADMIN_ID = env_int("ADMIN_ID")
 

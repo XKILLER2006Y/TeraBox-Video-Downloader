@@ -2,7 +2,6 @@ import os
 import time
 import threading
 import asyncio
-import logging
 from telethon import Button
 from telethon.errors import FloodWaitError
 
@@ -17,13 +16,14 @@ from . import alerts
 from firebase_db.cache import add_to_cache
 from firebase_db.stats import record_success as stats_ok, record_failure as stats_fail
 from .progress_callbacks import make_download_progress_cb, make_upload_progress_cb
+from .structured_log import ctx_logger, bind_context, new_request_id
 
 from teraboxDL.errors import DownloadError, CancelledError
 from teraboxDL.public_api import download_terabox_file_experimental
 from diskwalaDL.public_api import get_diskwala_info, extract_diskwala_id
 from diskwalaDL.errors import DiskwalaError, DiskwalaDirectError
 
-log = logging.getLogger(__name__)
+log = ctx_logger(__name__)
 
 ADMIN_ID = env_int("ADMIN_ID")
 
@@ -35,6 +35,8 @@ DW_MODE = "dw"
 
 #! ONLY PUBLIC API
 async def process_diskwala(event, diskwala_url: str) -> None:
+    rid = new_request_id()
+    bind_context(request_id=rid, user_id=event.chat_id, download_id=rid)
     if shutting_down.is_set():
         await _safe_send(event.respond, "🛑 Bot is restarting — please try again in a minute.")
         return
@@ -273,6 +275,7 @@ async def _dw_helper(event, diskwala_url: str) -> None:
             try:
                 sent_video = await _safe_send(
                     bot.send_file,
+                                bot.send_file,
                     chat_id,
                     storage_msg.media,
                     caption=_build_caption(dl_time, up_time, total_time),

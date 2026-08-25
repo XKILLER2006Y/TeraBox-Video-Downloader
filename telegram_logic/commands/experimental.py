@@ -1,8 +1,8 @@
-import logging
 from telethon import events
 from ..bot import bot
 from ..helpers import extract_all_terabox_url_exp, parse_quality, cap_links, DEFAULT_QUALITY
 from ..terabox_exp import process_terabox_experimental, _b64d
+from ..structured_log import ctx_logger
 from diskwalaDL.public_api import extract_all_diskwala_urls
 
 _DISKWALA_HINT = (
@@ -17,7 +17,7 @@ _USAGE = (
     "Qualities: 360p, 480p, 720p, 1080p (default: best available)"
 )
 
-log = logging.getLogger(__name__)
+log = ctx_logger(__name__)
 
 
 @bot.on(events.NewMessage(pattern=r"^/exp(?:@\S+)?(?:\s+([\s\S]+))?$"))

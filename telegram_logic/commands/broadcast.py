@@ -1,5 +1,4 @@
 import asyncio
-import logging
 from telethon import events
 from telethon.errors import FloodWaitError
 from telethon.tl.types import (
@@ -7,9 +6,10 @@ from telethon.tl.types import (
 )
 from ..bot import bot
 from ..helpers import env_int
+from ..structured_log import ctx_logger
 from firebase_db.users import get_all_users
 
-log = logging.getLogger(__name__)
+log = ctx_logger(__name__)
 
 ADMIN_ID = env_int("ADMIN_ID")
 

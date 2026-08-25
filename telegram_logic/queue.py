@@ -1,9 +1,9 @@
 import time
 import asyncio
-import logging
+from .structured_log import ctx_logger
 from telethon.errors import FloodWaitError
 
-log = logging.getLogger(__name__)
+log = ctx_logger(__name__)
 
 class MessageQueue:
     def __init__(self, concurrency_limit: int = 20):

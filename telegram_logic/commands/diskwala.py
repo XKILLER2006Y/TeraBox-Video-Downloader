@@ -1,11 +1,11 @@
-import logging
 from telethon import events
 from ..bot import bot
 from ..diskwala import process_diskwala
 from ..helpers import extract_all_terabox_url_exp, cap_links
+from ..structured_log import ctx_logger
 from diskwalaDL.public_api import extract_all_diskwala_urls
 
-log = logging.getLogger(__name__)
+log = ctx_logger(__name__)
 
 
 @bot.on(events.NewMessage(pattern=r"(?i)^/dw(?:@\S+)?(?:\s+([\s\S]+))?$"))

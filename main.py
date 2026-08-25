@@ -4,13 +4,13 @@ load_dotenv()  # must be first — other modules read env vars at import time
 import gc  # noqa: E402
 import os  # noqa: E402
 import asyncio  # noqa: E402
-import logging  # noqa: E402
-import logging.handlers  # noqa: E402
 import glob  # noqa: E402
 import time  # noqa: E402
 import resource  # noqa: E402
 from concurrent.futures import ThreadPoolExecutor  # noqa: E402
 from contextlib import asynccontextmanager  # noqa: E402
+
+from telegram_logic.structured_log import setup_logging, ctx_logger  # noqa: E402
 
 # ── CPython memory tuning (Cloud Shell: 2GB RAM) ─────────────────────────────────────────———————
 # Reduce GC frequency: gen0 threshold 700→1500, gen1→15, gen2→10
@@ -61,8 +61,8 @@ async def global_tracker(event):
 
     try:
         await asyncio.to_thread(track_user, event.chat_id, username)
-    except Exception as e:
-        log.error(f"[global_tracker] Unexpected error in track_user: {e}")
+    except Exception:
+        log.error("track_user failed", extra={"chat_id": event.chat_id}, exc_info=True)
     # Does not raise StopPropagation, allowing other handlers to execute
 
 import telegram_logic.commands  # registers all @bot.on(...) handlers  # noqa: E402, F401
@@ -72,17 +72,8 @@ APP_ID = env_int("APP_ID")
 API_HASH = os.environ.get("API_HASH", "")
 STORAGE_GROUP_ID = env_int("STORAGE_GROUP_ID")
 
-logging.basicConfig(
-    format="%(asctime)s [%(levelname)s] %(message)s", level=logging.INFO,
-)
-log = logging.getLogger(__name__)
-
-# ── Log rotation: prevent bot.log from eating disk on Cloud Shell ──
-_log_handler = logging.handlers.RotatingFileHandler(
-    "bot.log", maxBytes=5 * 1024 * 1024, backupCount=2, encoding="utf-8"
-)
-_log_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
-logging.getLogger().addHandler(_log_handler)
+setup_logging()
+log = ctx_logger(__name__)
 
 # — Wrong-source hints ————————————————————————————————————————————————————————————————————————
 DISKWALA_IN_TERABOX_MODE = (
@@ -128,8 +119,8 @@ async def handle_message(event):
     # Get mode based on user-id..
     try:
         mode = await asyncio.to_thread(get_user_mode, event.chat_id)
-    except Exception as e:
-        log.error(f"[handle_message] DB error fetching user mode: {e}")
+    except Exception:
+        log.error("DB error fetching user mode", extra={"chat_id": event.chat_id}, exc_info=True)
         await event.respond("⚠️ Database error. Please try again later.")
         return
 
@@ -137,43 +128,43 @@ async def handle_message(event):
         terabox_url_list = extract_all_terabox_url_exp(text)
         if terabox_url_list:
             try:
-                log.info("Message redirected to [exp] mode")
+                log.info("routed to exp mode", extra={"chat_id": event.chat_id, "url_count": len(terabox_url_list)})
                 await _run_batch(event, terabox_url_list, process_terabox_experimental)
-            except Exception as e:
-                log.error(f"Unhandled error in handle_message: {e}")
+            except Exception:
+                log.error("unhandled error in handle_message", extra={"chat_id": event.chat_id}, exc_info=True)
             return
 
     elif mode == 'exphd':
         terabox_url_list = extract_all_terabox_url_exp(text)
         if terabox_url_list:
             try:
-                log.info("Message redirected to [exphd] mode")
+                log.info("routed to exphd mode", extra={"chat_id": event.chat_id, "url_count": len(terabox_url_list)})
                 await _run_batch(
                     event, terabox_url_list,
                     lambda ev, url: process_terabox_experimental(ev, url, is_hd=True),
                 )
-            except Exception as e:
-                log.error(f"Unhandled error in handle_message: {e}")
+            except Exception:
+                log.error("unhandled error in handle_message", extra={"chat_id": event.chat_id}, exc_info=True)
             return
 
     elif mode == 'dw':
         diskwala_url_list = extract_all_diskwala_urls(text)
         if diskwala_url_list:
             try:
-                log.info("Message redirected to [dw] mode")
+                log.info("routed to dw mode", extra={"chat_id": event.chat_id, "url_count": len(diskwala_url_list)})
                 await _run_batch(event, diskwala_url_list, process_diskwala)
-            except Exception as e:
-                log.error(f"Unhandled error in handle_message: {e}")
+            except Exception:
+                log.error("unhandled error in handle_message", extra={"chat_id": event.chat_id}, exc_info=True)
             return
 
     # ── Universal DL fallback — try all platforms if no mode-specific match ─
     universal_url_list = extract_universal_urls(text)
     if universal_url_list:
         try:
-            log.info(f"Universal DL: processing {len(universal_url_list)} link(s)")
+            log.info("universal DL: processing links", extra={"chat_id": event.chat_id, "url_count": len(universal_url_list)})
             await _run_batch(event, universal_url_list, lambda ev, url: process_universal(ev, url, bot))
-        except Exception as e:
-            log.error(f"Unhandled error in universal DL: {e}")
+        except Exception:
+            log.error("unhandled error in universal DL", extra={"chat_id": event.chat_id}, exc_info=True)
 
     return
 # — Telegram bot runner ———————————————————————————————————————————————————————————————————————
@@ -213,12 +204,11 @@ async def run_bot() -> None:
     if STORAGE_GROUP_ID:
         try:
             await bot.get_input_entity(STORAGE_GROUP_ID)
-            log.info(f"Storage group {STORAGE_GROUP_ID} reachable — caching enabled.")
+            log.info("storage group reachable", extra={"storage_group_id": STORAGE_GROUP_ID})
         except Exception as e:
             log.error(
-                f"STORAGE_GROUP_ID {STORAGE_GROUP_ID} is NOT accessible to this bot ({e}). "
-                f"Add the bot as an admin/member to that group or channel, then restart. "
-                f"Continuing WITHOUT caching — videos will be uploaded separately per user."
+                "storage group not accessible — continuing without caching",
+                extra={"storage_group_id": STORAGE_GROUP_ID, "error": str(e)},
             )
 
     default_commands = [ 
@@ -257,8 +247,7 @@ async def run_bot() -> None:
         except Exception as e:
             log.error(f"Failed to set admin commands. You may need to send a message to the bot first. Error: {e}")
 
-    log.info("Bot commands registered.")
-    log.info("Bot started! Waiting for messages...")
+    log.info("bot started, waiting for messages")
 
     await bot.run_until_disconnected()
 
@@ -285,7 +274,7 @@ async def _storage_cleanup_loop():
                         os.remove(f)
                         cleaned += 1
             if cleaned > 0:
-                log.info(f"[Storage Cleanup] Removed {cleaned} old files")
+                log.info("storage cleanup done", extra={"files_removed": cleaned})
         except Exception as e:
             log.error(f"[Storage Cleanup] Error: {e}")
 
@@ -296,10 +285,9 @@ async def _memory_monitor_loop():
         try:
             await asyncio.sleep(300)
             kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-            log.info(f"[Memory] Peak RSS: {kb // 1024}MB")
+            log.info("memory snapshot", extra={"peak_rss_mb": kb // 1024})
             # Manual GC sweep + compact after logging — reclaims fragmented memory
-            collected = gc.collect(generation=2)
-            log.debug(f"[Memory] GC collected {collected} objects")
+            log.debug("gc sweep", extra={"collected": gc.collect(generation=2)})
         except Exception:
             pass
 
@@ -311,11 +299,11 @@ async def lifespan(app: FastAPI):
     mem_task = asyncio.create_task(_memory_monitor_loop())
     yield
     # ── Graceful shutdown: refuse new work, let in-flight downloads finish ──
-    log.info("Shutdown: stopping new downloads and draining active tasks…")
+    log.info("shutdown initiated — draining active tasks")
     telegram_logic_bot.shutting_down.set()
     leftover = await telegram_logic_bot.drain_active_tasks(timeout=90.0)
     if leftover:
-        log.warning(f"Shutdown: {leftover} task(s) did not finish in time — cancelling")
+        log.warning("shutdown: tasks did not finish in time", extra={"leftover": leftover})
     mem_task.cancel()
     cleanup_task.cancel()
     bot_task.cancel()

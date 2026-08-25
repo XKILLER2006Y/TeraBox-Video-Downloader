@@ -8,15 +8,15 @@ only to ADMIN_ID when set.
 import os
 import time
 import asyncio
-import logging
 from telethon import events
 
 from ..bot import bot, active_tasks, terabox_queue, shutting_down, START_TIME
 from ..helpers import env_int, format_size
 from .. import rate_limit
+from ..structured_log import ctx_logger
 from teraboxDL.terabox_dl import cookie_pool_health
 
-log = logging.getLogger(__name__)
+log = ctx_logger(__name__)
 
 ADMIN_ID = env_int("ADMIN_ID")
 

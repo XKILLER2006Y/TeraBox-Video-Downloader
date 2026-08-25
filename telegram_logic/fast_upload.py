@@ -8,11 +8,11 @@ Memory-efficient: reads chunks from disk instead of loading entire file.
 import os
 import math
 import asyncio
-import logging
+from .structured_log import ctx_logger
 from telethon import utils  # noqa: F401 — kept for future Telethon helpers
 from telethon.tl import types, functions
 
-log = logging.getLogger(__name__)
+log = ctx_logger(__name__)
 
 # Config
 CHUNK_SIZE = 512 * 1024  # 512KB chunks (optimal for parallel uploads)
