@@ -83,6 +83,9 @@ python main.py
 | `FAILURE_COOLDOWN_SECONDS` | No | Block duration once budget exhausted (default 600) |
 | `MAX_LINKS_PER_MESSAGE` | No | Max links processed per message (default 5) |
 | `MAX_FILE_SIZE_MB` | No | Skip files larger than this (default 0 = unlimited) |
+| `DAILY_LIMIT_PER_USER` | No | Per-user daily download cap, UTC reset (default 0 = off) |
+| `AUTO_COMPRESS_THRESHOLD_MB` | No | Auto H.264-compress downloads above this size (default 0 = manual `comp` only) |
+| `USER_MAX_CONCURRENT` | No | Concurrent downloads per user, admins exempt (default 2) |
 
 ## Bot Commands
 
@@ -96,6 +99,8 @@ python main.py
 | `/random` | Random video from cache |
 | `/status` | Bot health & stats (admin detail when sent by ADMIN_ID) |
 | `/stats` | Your personal download stats (admins also see global) |
+| `/quota` | Daily quota usage with progress bar |
+| `/mp3 <link> [128\|192\|320]` | Extract audio; bitrate optional |
 | `/history` | Your recent downloads |
 | `/settings` | View/set download mode |
 | `/op <message>` | Send feedback to admin |

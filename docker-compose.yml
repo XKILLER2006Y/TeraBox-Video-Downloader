@@ -22,7 +22,7 @@ services:
           memory: 1G
           cpus: "2.0"
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request,os;urllib.request.urlopen(f'http://localhost:{os.environ.get(\"PORT\",\"3000\")}/ping')"]
+      test: ["CMD", "python", "-c", "import urllib.request,os;urllib.request.urlopen(f'http://localhost:{os.environ.get(\"PORT\",\"3000\")}/health')"]
       interval: 60s
       timeout: 5s
       retries: 3

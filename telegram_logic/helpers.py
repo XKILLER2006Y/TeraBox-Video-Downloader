@@ -150,6 +150,18 @@ QUALITY_MAP: dict[int, str] = {
 DEFAULT_QUALITY = "M3U8_AUTO_1080"
 
 
+def parse_mp3_bitrate(text: str) -> tuple[str, int | None]:
+    """
+    Extract a trailing audio bitrate token (128 / 192 / 320, optionally
+    with k/kbps suffix) from the text. Returns (remaining, kbps|None).
+    """
+    m = _MP3_KBPS_RE.search(text)
+    if not m:
+        return text, None
+    remaining = (text[: m.start()] + " " + text[m.end():]).strip()
+    return remaining, int(m.group(1))
+
+
 def parse_comp_flag(text: str) -> tuple[str, bool]:
     """
     Extract the standalone `comp` keyword anywhere in the text (case-
@@ -183,6 +195,11 @@ def parse_quality(text: str) -> tuple[str, str]:
 # ── File size limit ────────────────────────────────────────────────────────────
 
 MAX_FILE_SIZE_MB = env_int("MAX_FILE_SIZE_MB", 0)  # 0 = unlimited
+
+# Auto-compress downloads above this size (MB). 0 = only manual `comp`.
+AUTO_COMPRESS_THRESHOLD_MB = env_int("AUTO_COMPRESS_THRESHOLD_MB", 0)
+
+_MP3_KBPS_RE = re.compile(r"(?i)(?:^|\s)(128|192|320)\s*(?:k(?:bps)?)?(?=\s|$)")
 
 
 def check_size_limit(size_bytes: int) -> str | None:

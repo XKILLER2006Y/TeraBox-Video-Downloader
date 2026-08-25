@@ -9,7 +9,9 @@ errors out, or compression would not shrink meaningfully.
 import os
 import shutil
 import subprocess
+import tempfile
 import threading
+import time
 
 from teraboxDL.errors import CancelledError
 
@@ -35,11 +37,13 @@ def _ffmpeg_compress(src: str, cancel_event: threading.Event | None) -> str | No
         "-movflags", "+faststart",
         dst,
     ]
+    # stderr goes to a temp file: a PIPE nobody drains can fill (~64KB) and
+    # deadlock long encodes, even at -loglevel error.
+    err_file = tempfile.TemporaryFile(mode="w+", encoding="utf-8")
     try:
-        proc = subprocess.Popen(
-            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
-        )
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=err_file)
     except OSError as e:
+        err_file.close()
         log.warning("compression could not start", extra={"error": str(e)})
         return None
 
@@ -51,19 +55,22 @@ def _ffmpeg_compress(src: str, cancel_event: threading.Event | None) -> str | No
         if cancel_event is not None and cancel_event.is_set():
             proc.kill()
             proc.wait()
+            err_file.close()
             if os.path.exists(dst):
                 os.remove(dst)
             raise CancelledError("Download cancelled")
-        import time as _time
-        _time.sleep(0.5)
+        time.sleep(0.5)
 
     if ret != 0:
-        stderr = (proc.stderr.read() if proc.stderr else "")[-300:]
+        err_file.seek(0)
+        stderr = err_file.read()[-300:]
+        err_file.close()
         log.warning("compression failed", extra={"stderr": stderr})
         if os.path.exists(dst):
             os.remove(dst)
         return None
 
+    err_file.close()
     return dst
 
 

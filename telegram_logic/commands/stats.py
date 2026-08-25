@@ -12,17 +12,41 @@ from ..bot import bot
 from ..helpers import env_int, format_size
 from ..structured_log import ctx_logger
 from firebase_db.stats import get_stats
-from firebase_db.users import get_history, get_user_stats
+from firebase_db.users import get_history, get_user_stats, get_today_count
 
 log = ctx_logger(__name__)
 
 ADMIN_ID = env_int("ADMIN_ID")
+DAILY_LIMIT_PER_USER = env_int("DAILY_LIMIT_PER_USER", 0)
 
 MODE_LABELS = {"exp": "TeraBox", "exphd": "TeraBox HD", "dw": "Diskwala"}
 
 
 def _mode_label(mode: str | None) -> str:
     return MODE_LABELS.get(mode or "", mode or "—")
+
+
+def build_quota_text(used: int, limit: int) -> str:
+    """One-glance daily quota view. Limit 0 renders the unlimited variant."""
+    if limit <= 0:
+        return (
+            "**📊 Daily Quota**\n\n"
+            f"**Used today:** {used}\n"
+            "No daily limit is set on this bot — download away! 🎉"
+        )
+    remaining = max(limit - used, 0)
+    bar_len = 20
+    filled = round(bar_len * used / limit) if limit else 0
+    bar = "█" * min(filled, bar_len) + "░" * (bar_len - min(filled, bar_len))
+    pct = round(100 * used / limit) if limit else 0
+    mood = "🎉" if remaining > limit * 0.25 else ("⚠️" if remaining else "🛑")
+    return (
+        f"**📊 Daily Quota** {mood}\n\n"
+        f"`{bar}` {pct}%\n\n"
+        f"**Used:** {used} / {limit}\n"
+        f"**Remaining:** {remaining}\n"
+        "Resets at midnight UTC ⏰"
+    )
 
 
 def build_stats_text(
@@ -70,3 +94,17 @@ async def cmd_stats(event):
         mode = None
 
     await event.respond(build_stats_text(user_stats, len(history), mode, gs))
+
+
+@bot.on(events.NewMessage(pattern=r"^/quota$"))
+async def cmd_quota(event):
+    chat_id = event.chat_id
+    used = await asyncio.to_thread(get_today_count, chat_id)
+    limit = DAILY_LIMIT_PER_USER
+
+    # Admins see the raw counter but are never limited.
+    if ADMIN_ID and chat_id == ADMIN_ID:
+        await event.respond(build_quota_text(used, limit) + "\n\n_You are admin — limits never apply to you._")
+        return
+
+    await event.respond(build_quota_text(used, limit))

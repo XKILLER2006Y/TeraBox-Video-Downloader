@@ -222,6 +222,7 @@ async def run_bot() -> None:
         BotCommand(command="status", description="Bot health & stats"),
         BotCommand(command="history", description="Your recent downloads"),
         BotCommand(command="stats", description="Your download statistics"),
+        BotCommand(command="quota", description="Your remaining downloads today"),
         BotCommand(command="mp3", description="Extract audio from a TeraBox video"),
         BotCommand(command="settings", description="View Details"),
         BotCommand(command="op", description="Send feedback to admin"),
@@ -379,9 +380,9 @@ async function tick(){
     c('uptime',d.uptime)+c('active downloads',d.active,d.active>=5)+
     c('queue',d.queue,d.queue>5)+c('memory (rss)',d.mem)+
     c('today ✓',d.today_ok)+c('today ✗',d.today_fail,d.today_fail>d.today_ok);
-  document.getElementById('t').innerHTML='<tr><th>cookie</th><th>state</th><th>failures</th></tr>'+
-    d.cookies.map(k=>`<tr><td>${k.name}</td><td class="${k.state=='healthy'?'ok':'bad'}">${k.state}</td><td>${k.fails}</td></tr>`).join('')
-    ||'<tr><td colspan=3>no cookies configured</td></tr>';
+  document.getElementById('t').innerHTML='<tr><th>cookie</th><th>state</th></tr>'+
+    d.cookies.map(k=>`<tr><td>#${k.index}</td><td class="${k.state=='ok'?'ok':(k.state=='bad'?'bad':'')}">${k.state}</td></tr>`).join('')
+    ||'<tr><td colspan=2>no cookies configured</td></tr>';
  }catch(e){document.getElementById('ref').textContent='fetch failed — check DASHBOARD_TOKEN';}
 }
 tick();setInterval(tick,3000);

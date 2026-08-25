@@ -13,7 +13,7 @@ from telethon import events
 from telethon.tl.types import DocumentAttributeAudio, DocumentAttributeFilename
 
 from ..bot import bot, _safe_send, shutting_down, active_tasks, acquire_user_slot, release_user_slot, USER_MAX_CONCURRENT
-from ..helpers import env_int, format_size, check_size_limit
+from ..helpers import env_int, format_size, check_size_limit, parse_mp3_bitrate
 from .. import rate_limit
 from firebase_db.stats import record_success as stats_ok, record_failure as stats_fail
 from firebase_db.users import record_history, bump_today
@@ -27,15 +27,16 @@ log = ctx_logger(__name__)
 ADMIN_ID = env_int("ADMIN_ID")
 
 
-def _convert_to_mp3(mp4_path: str) -> str:
-    """ffmpeg video -> mp3 (V5 ~130kbps). Raises TeraBoxError on failure."""
+def _convert_to_mp3(mp4_path: str, kbps: int | None = None) -> str:
+    """ffmpeg video -> mp3. Explicit -b:a when kbps given, else V5 (~130k)."""
     mp3_path = os.path.splitext(mp4_path)[0] + ".mp3"
+    audio_args = ["-b:a", f"{kbps}k"] if kbps else ["-q:a", "5"]
     try:
         proc = subprocess.run(
             [
                 "ffmpeg", "-y", "-loglevel", "error",
                 "-i", mp4_path,
-                "-vn", "-acodec", "libmp3lame", "-q:a", "5",
+                "-vn", "-acodec", "libmp3lame", *audio_args,
                 mp3_path,
             ],
             capture_output=True, text=True, timeout=1800,
@@ -62,8 +63,12 @@ async def cmd_mp3(event):
         return
 
     arg = (event.pattern_match.group(1) or "").strip()
+
+    # Optional trailing bitrate: /mp3 <link> 320
+    arg, kbps = parse_mp3_bitrate(arg)
+
     if not arg:
-        await _safe_send(event.respond, "Usage: `/mp3 <link>`\n\nExample: `/mp3 https://1024tera.com/s/1abc…`")
+        await _safe_send(event.respond, "Usage: `/mp3 <link> [128|192|320]`\n\nExample: `/mp3 https://1024tera.com/s/1abc…`")
         return
 
     chat_id = event.chat_id
@@ -115,7 +120,7 @@ async def cmd_mp3(event):
         )
 
         await _safe_send(status.edit, "🎵 Extracting audio…")
-        mp3_path = await asyncio.to_thread(_convert_to_mp3, filepath)
+        mp3_path = await asyncio.to_thread(_convert_to_mp3, filepath, kbps)
 
         mp3_size = os.path.getsize(mp3_path)
         title = _strip_ext(filename)
@@ -141,7 +146,7 @@ async def cmd_mp3(event):
             await _safe_send(status.delete)
         except Exception:
             pass
-        log.info("mp3 delivered", extra={"title": title, "bytes": mp3_size})
+        log.info("mp3 delivered", extra={"title": title, "bytes": mp3_size, "bitrate": kbps})
 
     except CancelledError:
         _cleanup(locals().get("filepath"), locals().get("mp3_path"))

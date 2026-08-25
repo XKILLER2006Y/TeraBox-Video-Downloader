@@ -398,6 +398,51 @@ check("dashboard html has cards + cookie table",
       "Cookie pool" in _DASH_HTML and "/api/stats" in _DASH_HTML and "setInterval" in _DASH_HTML)
 
 
+# ── 23. Bug-fix regression & quota ────────────────────────────────────────────
+group("Bug-fix regressions / quota")
+from telegram_logic.helpers import parse_mp3_bitrate
+import inspect as _inspect
+from telegram_logic.structured_log import bind_context
+
+t, k = parse_mp3_bitrate("get this one 320")
+check("bitrate 320 parsed", t == "get this one" and k == 320)
+t, k = parse_mp3_bitrate("song link 192k")
+check("192k suffix tolerated", k == 192)
+t, k = parse_mp3_bitrate("link 128")
+check("128 bare", k == 128)
+t, k = parse_mp3_bitrate("video at 1080p")
+check("resolution not mistaken for bitrate", k is None and "1080p" in t)
+t, k = parse_mp3_bitrate("no token here")
+check("absent bitrate → None", k is None)
+
+# BUG1 regression: bind_context must still be keyword-exact — calling with an
+# unknown kwarg raises TypeError (so a future re-introduction of the
+# bitrate= bug gets caught by review, and current code paths are safe).
+sig = _inspect.signature(bind_context)
+check("bind_context has no arbitrary kwargs",
+      set(sig.parameters) == {"request_id", "user_id", "download_id"})
+
+# BUG2 regression: cookie health keys match dashboard JS expectations
+health_row = {"index": 0, "state": "ok"}   # shape produced by _CookiePool.health
+import main as _main
+check("dashboard template uses index+state only",
+      "k.index" in _main._DASH_HTML and "k.name" not in _main._DASH_HTML
+      and "k.fails" not in _main._DASH_HTML)
+
+# quota text builder
+from telegram_logic.commands.stats import build_quota_text
+txt = build_quota_text(7, 20)
+check("quota bar + numbers render", "`" in txt and "7 / 20" in txt and "Remaining:** 13" in txt)
+txt0 = build_quota_text(20, 20)
+check("exhausted quota shows stop emoji", "🛑" in txt0 and "Remaining:** 0" in txt0)
+txtu = build_quota_text(5, 0)
+check("unlimited variant", "No daily limit" in txtu)
+
+# auto-compress threshold constant reachable from exp module namespace
+import telegram_logic.terabox_exp as TE
+check("AUTO_COMPRESS_THRESHOLD_MB imported into pipeline", hasattr(TE, "AUTO_COMPRESS_THRESHOLD_MB"))
+
+
 print(f"\n{'=' * 54}")
 print(f"Results: {PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

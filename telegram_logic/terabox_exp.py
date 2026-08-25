@@ -8,7 +8,7 @@ from telethon import Button
 from telethon.errors import FloodWaitError
 
 from .bot import bot, _find_cached_video, _pre_upload_file, _upload_to_storage, _cancellable, terabox_queue, _safe_send, active_tasks, STORAGE_GROUP_ID, shutting_down, acquire_user_slot, release_user_slot, USER_MAX_CONCURRENT
-from .helpers import format_size, format_duration, extract_surl_exp, check_size_limit, DEFAULT_QUALITY, env_int
+from .helpers import format_size, format_duration, extract_surl_exp, check_size_limit, DEFAULT_QUALITY, env_int, AUTO_COMPRESS_THRESHOLD_MB
 from . import rate_limit
 from firebase_db.cache import add_to_cache
 from firebase_db.stats import record_success as stats_ok, record_failure as stats_fail
@@ -259,9 +259,18 @@ async def helper(event, terabox_url: str, is_hd: bool, quality: str = DEFAULT_QU
             return
 
         # — Phase 3b: optional H.264 compression ————————————————————————————
-        if compress:
+        auto_trigger = (
+            not compress
+            and AUTO_COMPRESS_THRESHOLD_MB > 0
+            and os.path.getsize(filepath) > AUTO_COMPRESS_THRESHOLD_MB * 1024 * 1024
+        )
+        if compress or auto_trigger:
             await _safe_send(status.edit, "🗜️ Compressing video… (this can take a while)")
-            filepath, saved_note = await asyncio.to_thread(maybe_compress, filepath, cancel_event)
+            try:
+                filepath, saved_note = await asyncio.to_thread(maybe_compress, filepath, cancel_event)
+            except CancelledError:
+                await _safe_send(status.edit, "🚫 Cancelled.")
+                return
             if saved_note:
                 log.info("compression done", extra={"note": saved_note})
 
