@@ -557,11 +557,19 @@ for i in range(0, 500_000, 10_000):   # 50 rapid calls within throttle window
 _time.sleep(0.5)
 check("throttle holds with total=0 + expected_total", fs.edits <= 2,
       detail=f"edits={fs.edits}")
-cb(1_000_000, 0)                       # completion passes through immediately
-_time.sleep(0.5)
-final_edits = fs.edits
+# NEW CONTRACT: total=0 streams never signal completion via callback
+# (drift past expected_total must not disable throttle). Pipelines edit
+# their own final status; only REAL totals pass instantly.
+cb(1_000_000, 0)
+_time.sleep(0.4)
+check("total=0 never bypasses throttle", fs.edits <= 2, detail=f"edits={fs.edits}")
+
+fs2 = _FakeStatus()
+cb2 = make_download_progress_cb(fs2, "v.mp4", "", loop)
+cb2(500, 500)                          # REAL total + complete -> immediate
+_time.sleep(0.4)
+check("real-total completion instant", fs2.edits == 1, detail=f"edits={fs2.edits}")
 loop.call_soon_threadsafe(loop.stop)
-check("completion update not throttled away", final_edits >= 2)
 
 # /quota text edge: over-limit used shows clamped bar, pct may exceed 100
 from telegram_logic.commands.stats import build_quota_text as _bqt

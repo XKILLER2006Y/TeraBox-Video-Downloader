@@ -31,13 +31,17 @@ def make_download_progress_cb(
             pass
 
     def callback(current, total):
-        effective_total = total or expected_total
         now = time.time()
-        # Throttle to one edit / 5s; always allow the final update through.
-        done = bool(effective_total) and current >= effective_total
+        # Completion may ONLY be declared from a REAL total (API-reported).
+        # expected_total is an estimate — HLS/remux output routinely drifts
+        # past it, and treating that as 'done' disables the throttle for the
+        # rest of the download (edit flood). Pipelines emit their own final
+        # status anyway, so the callback never needs a guaranteed last tick.
+        done = bool(total) and current >= total
         if (now - last_update[0] < 5) and not done:
             return
         last_update[0] = now
+        effective_total = total or expected_total
         pct = current / effective_total * 100 if effective_total else 0
         downloaded = format_size(current)
         total_str = format_size(effective_total) if effective_total else size_str

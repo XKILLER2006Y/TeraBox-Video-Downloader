@@ -276,6 +276,7 @@ async def helper(event, terabox_url: str, is_hd: bool, quality: str = DEFAULT_QU
             try:
                 filepath, saved_note = await asyncio.to_thread(maybe_compress, filepath, cancel_event)
             except CancelledError:
+                _cleanup_all(filepath)
                 await _safe_send(status.edit, "🚫 Cancelled.")
                 return
             if saved_note:

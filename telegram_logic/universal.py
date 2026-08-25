@@ -30,6 +30,21 @@ from network import get_session
 
 logger = logging.getLogger(__name__)
 
+# Telegram caps callback_data at 64 BYTES; full URLs overflow. Cancel
+# buttons carry a short token resolved back to the task_key here.
+_ucancel_tokens: dict[str, tuple[int, str]] = {}
+
+
+def _mint_cancel_token(task_key: tuple[int, str]) -> str:
+    import uuid
+    token = uuid.uuid4().hex[:10]
+    if len(_ucancel_tokens) > 500:          # opportunistic prune
+        for k in list(_ucancel_tokens)[:250]:
+            _ucancel_tokens.pop(k, None)
+    _ucancel_tokens[token] = task_key
+    return token
+
+
 ADMIN_ID = env_int("ADMIN_ID")
 DAILY_LIMIT_PER_USER = env_int("DAILY_LIMIT_PER_USER", 0)
 
@@ -103,10 +118,11 @@ async def process_universal(event, url: str, bot) -> None:
                 return
 
         from telethon import Button as _Btn
+        _ctoken = _mint_cancel_token(task_key)
         status_msg = await _safe_send(
             event.respond,
             "🔍 Resolving link...",
-            buttons=[[_Btn.inline("❌ Cancel", data=f"ucancel:{url}")]],
+            buttons=[[_Btn.inline("❌ Cancel", data=f"ucancel:{_ctoken}")]],
         )
 
         try:
@@ -211,6 +227,9 @@ async def process_universal(event, url: str, bot) -> None:
     finally:
         with _lock:
             active_tasks.pop(task_key, None)
+        for tk, tv in list(_ucancel_tokens.items()):
+            if tv == task_key:
+                _ucancel_tokens.pop(tk, None)
         if acquired:
             release_user_slot(chat_id, is_admin=is_admin)
         if filepath and os.path.exists(filepath):

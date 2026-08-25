@@ -32,7 +32,7 @@ async def cmd_history(event):
 
     lines = ["🕘 **Your recent downloads**", ""]
     for entry in reversed(history[-10:]):  # newest first, cap display at 10
-        title = entry.get("t", "unknown")
+        title = str(entry.get("t", "unknown")).replace("`", "ʹ")  # keep code-span intact
         when = time.strftime("%d %b %H:%M", time.localtime(entry.get("at", 0)))
         lines.append(f"• `{title}` — {when}")
 

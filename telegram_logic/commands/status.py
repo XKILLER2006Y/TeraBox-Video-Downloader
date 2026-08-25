@@ -116,7 +116,7 @@ def build_status_text(is_admin: bool, stats: dict | None = None) -> str:
 @bot.on(events.NewMessage(pattern=r"^/status$"))
 async def cmd_status(event):
     log.info(f"Received /status command from chat {event.chat_id}")
-    is_admin = bool(ADMIN_ID and event.chat_id == ADMIN_ID)
+    is_admin = bool(ADMIN_ID and ADMIN_ID in (event.chat_id, event.sender_id))
     stats = None
     try:
         from firebase_db.stats import get_stats as _get_stats

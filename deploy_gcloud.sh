@@ -128,10 +128,10 @@ done
 EOF
 chmod +x "$BOT_DIR/cloud_shell_keepalive.sh"
 
-cat > "$HOME/.crontab.txt" << EOF
-*/4 * * * * /bin/touch $HOME/.keepalive
-EOF
-crontab "$HOME/.crontab.txt" 2>/dev/null || true
+# Append keepalive to the EXISTING crontab - wholesale replacement
+# silently destroyed any user-installed cron jobs on the host.
+( crontab -l 2>/dev/null | grep -v cloud_shell_keepalive ; \
+  echo "*/4 * * * * /bin/touch $HOME/.keepalive" ) | crontab - 2>/dev/null || true
 rm -f "$HOME/.crontab.txt"
 
 # Also start keepalive in a screen session right away

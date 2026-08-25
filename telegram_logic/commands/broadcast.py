@@ -97,6 +97,9 @@ async def cmd_broadcast(event):
                     text=inline_text if not reply_msg else None,
                 )
                 success_count += 1
+                # Re-pressure right after a flood episode is how you earn
+                # the NEXT flood wait — pace like a normal send.
+                await asyncio.sleep(0.3)
             except Exception:
                 fail_count += 1
 
