@@ -148,6 +148,9 @@ def _extract_filesize(html: str) -> int:
 
 def _extract_download_link(html: str, page_url: str) -> str | None:
     """Extract the actual download link from the final page."""
+    _ASSET_RE = re.compile(
+        r"\.(?:webmanifest|ico|png|jpe?g|gif|svg|css|js)(?:[?#]|$)", re.I
+    )
     # Try explicit download links
     for regex in (_DL_LINK_RE, _DL_LINK_RE2):
         m = regex.search(html)
@@ -155,6 +158,8 @@ def _extract_download_link(html: str, page_url: str) -> str | None:
             link = m.group(1)
             if not link.startswith('http'):
                 link = urljoin(page_url, link)
+            if _ASSET_RE.search(link):
+                continue  # favicon/webmanifest/css matched 'download' in path — skip
             return link
 
     # Look for onclick handlers with URLs
@@ -189,6 +194,17 @@ def resolve_filesadda(url: str, session: requests.Session | None = None) -> dict
 
     html = resp.text
 
+    # Expired/invalid files: this XFS deployment serves the generic homepage
+    # (marketing copy, no file form, HTTP 200) instead of a 404. Detect it
+    # before anything else — otherwise the word "Download" in the marketing
+    # text triggers the download2 flow against a page with no form.
+    if "op=download" not in html and not re.search(
+        r'name=["\']op["\']', html, re.I
+    ) and _TITLE_RE.search(html) is None and "Filename" not in html:
+        raise FilesAddaNotFound(
+            f"File expired, deleted, or link invalid (site served generic page): {url}"
+        )
+
     # Check for file-not-found indicators
     if re.search(r'file\s+(has\s+been\s+)?removed|not\s+found|expired|deleted', html[:4000], re.I):
         raise FilesAddaNotFound(f"File has been removed or expired: {url}")
@@ -200,6 +216,9 @@ def resolve_filesadda(url: str, session: requests.Session | None = None) -> dict
 
     # ── Step 2: Extract metadata ──────────────────────────────────────────
     filename = _extract_filename(html)
+    if not filename or filename.lower() in ("download", "file"):
+        code = url.rstrip("/").split("/")[-1].split(".")[0]
+        filename = f"file_{code}" if code else "download"
     filesize = _extract_filesize(html)
 
     # ── Step 3: Check for direct download link (some files skip timer) ────
@@ -209,7 +228,7 @@ def resolve_filesadda(url: str, session: requests.Session | None = None) -> dict
         return {"filename": filename, "size": filesize, "download_url": direct}
 
     # ── Step 4: POST op=download2 (timer page) ────────────────────────────
-    if _OP_DOWNLOAD2.search(html) or 'download' in html.lower():
+    if _OP_DOWNLOAD2.search(html) or re.search(r'name=["\']op["\']', html, re.I):
         hidden = _extract_hidden_fields(html)
         post_data = {'op': 'download2', **hidden}
 

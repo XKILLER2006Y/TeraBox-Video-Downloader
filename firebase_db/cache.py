@@ -104,6 +104,8 @@ def search_in_cache(surl: str, user_mode: MODE) -> int:
         search_order = ["exphd", "exp"]
     elif user_mode == "dw":
         search_order = ["dw"]
+    elif user_mode == "dl":
+        search_order = ["dl"]   # universal links: own bucket only
     else:  # exphd
         search_order = ["exphd"]
 

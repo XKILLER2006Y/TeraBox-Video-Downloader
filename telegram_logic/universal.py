@@ -25,6 +25,7 @@ from telegram_logic.helpers import env_int
 from telegram_logic.helpers import AUTO_COMPRESS_THRESHOLD_MB  # noqa: F401 (future use)
 from firebase_db.stats import record_success as stats_ok, record_failure as stats_fail
 from firebase_db.users import record_history, bump_today, get_today_count
+from firebase_db.cache import add_to_cache, search_in_cache
 from universalDL import resolve_universal, UniversalDL
 from network import get_session
 
@@ -103,7 +104,24 @@ async def process_universal(event, url: str, bot) -> None:
                 await _safe_send(event.reply, "⚠️ This link is already being processed.")
                 return
             active_tasks[task_key] = cancel_event
-        # ── Phase 1: Cache lookup (placeholder for future) ────────────────────────────────
+        # ── Phase 1: Cache lookup — instant re-serves, zero ad-sites ─────────────────────
+        if STORAGE_GROUP_ID:
+            cached_id = await asyncio.to_thread(search_in_cache, url, "dl")
+            if cached_id and cached_id != -1:
+                try:
+                    cached_msg = await bot.get_messages(STORAGE_GROUP_ID, ids=cached_id)
+                except Exception as e:
+                    logger.warning(f"Cache fetch failed for {url}: {e}")
+                    cached_msg = None
+                if cached_msg and (cached_msg.video or cached_msg.document):
+                    logger.info(f"Cache HIT for {url} -> msg {cached_id}")
+                    await _safe_send(event.reply, "⚡ **Cache hit** — serving instantly!")
+                    await bot.send_file(
+                        chat_id, cached_msg.media, caption=f"✅ {cached_msg.file.name or 'video'}",
+                        supports_streaming=True,
+                    )
+                    rate_limit.register_success(chat_id)
+                    return
 
         # ── Phase 2: Metadata fetch ─────────────────────────────────────────────────————————
         # Daily quota gate (mirrors exp/dw; admins exempt)
@@ -189,6 +207,7 @@ async def process_universal(event, url: str, bot) -> None:
                     timeout=300,
                 )
                 logger.info(f"Stored in warehouse: msg_id={storage_msg.id}")
+                await asyncio.to_thread(add_to_cache, url, storage_msg.id, "dl")
             except Exception as e:
                 logger.warning(f"Storage upload failed (non-fatal): {e}")
                 storage_msg = None
