@@ -125,13 +125,16 @@ def _decode_env_json(raw: str) -> dict:
         pass
 
     # ── Nothing worked — raise with diagnostics ─────────────────────────────
-    preview = cleaned[:120] + ("…" if len(cleaned) > 120 else "")
+    # Fingerprint instead of content preview — SA JSON starts with
+    # project_id/private_key_id identifiers that must not reach logs.
+    import hashlib as _hashlib
+    preview = f"sha256:{_hashlib.sha256(cleaned.encode()).hexdigest()[:12]} len={len(cleaned)}"
     raise ValueError(
         f"Could not decode FIREBASE_SECRETS into a JSON dict.\n"
         f"  Length : {len(raw)} chars\n"
         f"  Starts: {repr(raw[:30])}\n"
         f"  Ends  : {repr(raw[-30:])}\n"
-        f"  Preview (cleaned): {preview}\n"
+        f"  Fingerprint: {preview}\n"
         f"\n"
         f"TIP: Base64-encode your JSON to avoid quoting issues:\n"
         f"     base64 -w0 < service-account.json   (Linux)\n"

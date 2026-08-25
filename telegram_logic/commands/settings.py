@@ -84,7 +84,14 @@ async def cb_set_mode(event):
         )
         raise events.StopPropagation
 
-    await event.delete()  
+    try:
+        await event.answer()
+    except Exception:
+        pass
+    try:
+        await event.delete()
+    except Exception:
+        pass
     await event.respond(
         f"✅ **Mode switched successfully to [{mode}]**\n\n"
         f"➡️ **exp** : Reliable & Fast [Recommended]\n"

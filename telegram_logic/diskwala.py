@@ -117,6 +117,7 @@ async def _dw_helper(event, diskwala_url: str) -> None:
                     log.warning(f"Could not clean up {p}: {e}")
 
     cancel_event = threading.Event()
+    acquired = False
     try:
         existing = active_tasks.get(task_key)
         if existing is not None and not existing.is_set():
@@ -128,6 +129,7 @@ async def _dw_helper(event, diskwala_url: str) -> None:
                 f"⏳ You already have **{USER_MAX_CONCURRENT}** download(s) running. "
                 "Wait for them to finish first.")
             return
+        acquired = True
 
         active_tasks[task_key] = cancel_event
 
@@ -204,7 +206,10 @@ async def _dw_helper(event, diskwala_url: str) -> None:
         # — Phase 3: Download ——————————————————————————————————————————————————
         loop = asyncio.get_running_loop()
         dl_start = time.time()
-        dl_progress_cb = make_download_progress_cb(status, filename, size_str, loop, cancel_btn)
+        dl_progress_cb = make_download_progress_cb(
+            status, filename, size_str, loop, cancel_btn,
+            expected_total=int(info.get("size") or 0),
+        )
         try:
             filepath = await asyncio.to_thread(
                 download_terabox_file_experimental, download_url, filename, cancel_event, dl_progress_cb
@@ -369,4 +374,5 @@ async def _dw_helper(event, diskwala_url: str) -> None:
 
     finally:
         active_tasks.pop(task_key, None)
-        release_user_slot(chat_id, locals().get("is_admin", False))
+        if acquired:
+            release_user_slot(chat_id, is_admin)

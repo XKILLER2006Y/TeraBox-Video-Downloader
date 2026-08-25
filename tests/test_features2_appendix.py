@@ -495,6 +495,80 @@ import telegram_logic.terabox_exp as TE
 check("AUTO_COMPRESS_THRESHOLD_MB imported into pipeline", hasattr(TE, "AUTO_COMPRESS_THRESHOLD_MB"))
 
 
+# ── 24. Wave-8 regressions ────────────────────────────────────────────────────
+group("Wave-8 regressions")
+from teraboxDL.stream_downloader import is_streaming_manifest as _ism
+
+_matrix = {
+    "http://x/y/playlist.m3u8?token=a": True,
+    "http://x/index.mpd": True,
+    "http://x/hls/foo": True,          # slash-delimited segment dir
+    "https://v.telegram/DASH_720.mp4": False,   # telegram-style dash files
+    "http://x/y/Dashcam_2024.mp4": False,
+    "http://x/y/video.mp4": False,
+}
+check("manifest matrix (7 cases)", all(_ism(u) == w for u, w in _matrix.items()),
+      detail=str({u: _ism(u) for u, w in _matrix.items() if _ism(u) != w}))
+
+# slot balance: acquire/release paired via acquired flag — simulate the
+# pipeline pattern directly against bot's real counters
+from telegram_logic.bot import acquire_user_slot as _aq, release_user_slot as _rl, _user_active
+_user_active.clear()
+_acquired = False
+try:
+    if not _aq(424242):
+        raise AssertionError("first acquire should succeed")
+    _acquired = True
+finally:
+    if _acquired:
+        _rl(424242)
+check("balanced acquire/release leaves counter clean", 424242 not in _user_active)
+
+# denial path must NOT release: simulate flag discipline
+_user_active.clear()
+_acq = False
+_ok = _aq(525252)
+_ok2 = _aq(525252)          # cap=2 reached
+_denied = not _aq(525252)                       # third denied
+if _denied:
+    pass                                        # acquired stays False → no release
+else:
+    _acq = True
+check("counter intact after denial without release", _user_active.get(525252) == 2)
+_rl(525252)
+_rl(525252)
+
+# progress callback: total=0 with expected_total must throttle
+import asyncio as _aio
+import time as _time
+from telegram_logic.progress_callbacks import make_download_progress_cb
+
+class _FakeStatus:
+    def __init__(self): self.edits = 0
+    async def edit(self, text, buttons=None): self.edits += 1
+
+import threading as _th
+loop = _aio.new_event_loop()
+_th.Thread(target=loop.run_forever, daemon=True).start()
+fs = _FakeStatus()
+cb = make_download_progress_cb(fs, "f.mp4", "10 MB", loop, expected_total=1_000_000)
+for i in range(0, 500_000, 10_000):   # 50 rapid calls within throttle window
+    cb(i, 0)                           # HLS-style: total always 0
+_time.sleep(0.5)
+check("throttle holds with total=0 + expected_total", fs.edits <= 2,
+      detail=f"edits={fs.edits}")
+cb(1_000_000, 0)                       # completion passes through immediately
+_time.sleep(0.5)
+final_edits = fs.edits
+loop.call_soon_threadsafe(loop.stop)
+check("completion update not throttled away", final_edits >= 2)
+
+# /quota text edge: over-limit used shows clamped bar, pct may exceed 100
+from telegram_logic.commands.stats import build_quota_text as _bqt
+over = _bqt(30, 20)
+check("over-limit quota renders safely", "Remaining:** 0" in over and "█" in over)
+
+
 print(f"\n{'=' * 54}")
 print(f"Results: {PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

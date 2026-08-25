@@ -17,7 +17,10 @@ async def handle_dl(event):
     """Handle /dl <url> — universal download command."""
     from telegram_logic.universal import process_universal
 
-    url = event.pattern_match.group(1).strip()
+    url = (event.pattern_match.group(1) or "").strip()
+    if not url:
+        await event.reply("Usage: `/dl <link>`")
+        return
     if not url:
         await event.respond("Usage: `/dl <url>`")
         return

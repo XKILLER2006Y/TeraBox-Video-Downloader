@@ -18,13 +18,13 @@ import requests
 
 from telegram_logic.bot import (
     _safe_send, STORAGE_GROUP_ID, shutting_down,
-    acquire_user_slot, release_user_slot,
+    acquire_user_slot, release_user_slot, active_tasks,
 )
 from telegram_logic import rate_limit
 from telegram_logic.helpers import env_int
 from telegram_logic.helpers import AUTO_COMPRESS_THRESHOLD_MB  # noqa: F401 (future use)
 from firebase_db.stats import record_success as stats_ok, record_failure as stats_fail
-from firebase_db.users import record_history, bump_today
+from firebase_db.users import record_history, bump_today, get_today_count
 from universalDL import resolve_universal, UniversalDL
 from network import get_session
 
@@ -33,8 +33,8 @@ logger = logging.getLogger(__name__)
 ADMIN_ID = env_int("ADMIN_ID")
 DAILY_LIMIT_PER_USER = env_int("DAILY_LIMIT_PER_USER", 0)
 
-# Active tasks for duplicate-request rejection
-_active_tasks: dict[tuple[int, str], threading.Event] = {}
+# Duplicate-request guard shares bot.active_tasks so shutdown drain and
+# /cancel can see universal downloads too (they were invisible before).
 _lock = threading.Lock()
 
 # Size limit for universal hosts (default 2 GB)
@@ -73,6 +73,7 @@ async def process_universal(event, url: str, bot) -> None:
     filepath = None
     cancel_event = threading.Event()
     is_admin = bool(ADMIN_ID and chat_id == ADMIN_ID)
+    acquired = False
 
     try:
         # Guards inside try: every denial path flows through the finally that
@@ -80,16 +81,33 @@ async def process_universal(event, url: str, bot) -> None:
         if not acquire_user_slot(chat_id, is_admin=is_admin):
             await _safe_send(event.respond, "⏳ You already have downloads running — wait for them to finish.")
             return
+        acquired = True
 
         with _lock:
-            if task_key in _active_tasks and not _active_tasks[task_key].is_set():
+            if task_key in active_tasks and not active_tasks[task_key].is_set():
                 await _safe_send(event.reply, "⚠️ This link is already being processed.")
                 return
-            _active_tasks[task_key] = cancel_event
+            active_tasks[task_key] = cancel_event
         # ── Phase 1: Cache lookup (placeholder for future) ────────────────────────────────
 
         # ── Phase 2: Metadata fetch ─────────────────────────────────────────────────————————
-        status_msg = await _safe_send(event.respond, "🔍 Resolving link...")
+        # Daily quota gate (mirrors exp/dw; admins exempt)
+        if DAILY_LIMIT_PER_USER > 0 and not is_admin:
+            used = await asyncio.to_thread(get_today_count, chat_id)
+            if used >= DAILY_LIMIT_PER_USER:
+                await _safe_send(
+                    event.respond,
+                    f"📊 **Daily limit reached** ({used}/{DAILY_LIMIT_PER_USER} downloads).\n"
+                    "The counter resets at midnight UTC.",
+                )
+                return
+
+        from telethon import Button as _Btn
+        status_msg = await _safe_send(
+            event.respond,
+            "🔍 Resolving link...",
+            buttons=[[_Btn.inline("❌ Cancel", data=f"ucancel:{url}")]],
+        )
 
         try:
             info = await asyncio.to_thread(resolve_universal, url)
@@ -192,8 +210,9 @@ async def process_universal(event, url: str, bot) -> None:
             await _safe_send(status_msg.edit, f"❌ Error: {e}")
     finally:
         with _lock:
-            _active_tasks.pop(task_key, None)
-        release_user_slot(chat_id)
+            active_tasks.pop(task_key, None)
+        if acquired:
+            release_user_slot(chat_id, is_admin=is_admin)
         if filepath and os.path.exists(filepath):
             await asyncio.to_thread(_cleanup_files, filepath)
 

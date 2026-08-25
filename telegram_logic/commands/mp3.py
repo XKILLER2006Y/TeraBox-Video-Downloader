@@ -42,6 +42,7 @@ def _convert_to_mp3(mp4_path: str, kbps: int | None = None,
         mp3_path,
     ]
     err_file = tempfile.TemporaryFile(mode="w+", encoding="utf-8")
+    deadline = time.monotonic() + 1800  # hard cap: wedged ffmpeg must not pin a slot forever
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=err_file)
     except FileNotFoundError as e:
@@ -49,6 +50,13 @@ def _convert_to_mp3(mp4_path: str, kbps: int | None = None,
 
     while True:
         ret = proc.poll()
+        if ret is None and time.monotonic() > deadline:
+            proc.kill()
+            proc.wait()
+            err_file.close()
+            if os.path.exists(mp3_path):
+                os.remove(mp3_path)
+            raise TeraBoxError("Audio conversion timed out — the video may be too long.")
         if ret is not None:
             break
         if cancel_event is not None and cancel_event.is_set():
@@ -63,8 +71,9 @@ def _convert_to_mp3(mp4_path: str, kbps: int | None = None,
     if ret != 0 or not os.path.exists(mp3_path) or os.path.getsize(mp3_path) < 1024:
         err_file.seek(0)
         detail = err_file.read().strip().splitlines()[-1:] or ["unknown error"]
-        detail = (proc.stderr or "").strip().splitlines()[-1:] or ["unknown error"]
+        err_file.close()
         raise TeraBoxError(f"Audio conversion failed: {detail[0][:120]}")
+    err_file.close()
     return mp3_path
 
 

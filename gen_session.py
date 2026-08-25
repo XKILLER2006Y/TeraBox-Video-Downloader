@@ -21,7 +21,10 @@ from telethon.sessions import StringSession
 from dotenv import load_dotenv
 load_dotenv()
 
-APP_ID = int(os.getenv("APP_ID", "0"))
+try:
+    APP_ID = int(os.getenv("APP_ID", "0"))
+except ValueError:
+    raise SystemExit("APP_ID must be an integer — check your .env")
 API_HASH = os.getenv("API_HASH", "")
 
 

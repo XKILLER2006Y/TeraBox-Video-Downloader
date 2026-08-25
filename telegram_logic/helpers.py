@@ -114,7 +114,9 @@ def format_size(size_bytes: int) -> str:
 
 
 def format_duration(seconds: float) -> str:
-    """Format seconds into a human-readable duration."""
+    """Format seconds into a human-readable duration (clock-skew safe)."""
+    if seconds < 0:
+        seconds = 0.0  # negative deltas from clock skew render as "now-ish"
     if seconds < 1:
         return f"{seconds:.1f}s"
     

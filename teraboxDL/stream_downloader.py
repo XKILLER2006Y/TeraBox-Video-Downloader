@@ -70,7 +70,10 @@ def is_streaming_manifest(url: str) -> bool:
     # Word-boundary-ish matching: bare substrings like "dash" hijacked
     # ordinary files ("Dashcam_2024.mp4") into the manifest parser.
     import re as _re
-    if _re.search(r"\.(m3u8|mpd)(?:$|[?])|/(?:^|[/_.])(?:hls|dash)(?:[/_.]|$)", path):
+    # Extension wins first. For bare keyword URLs, require the keyword to be a
+    # SLASH-DELIMITED path segment ("/hls/...", "/dash/") — loose separators
+    # flagged ordinary files ("DASH_720.mp4", "Dashcam_2024.mp4").
+    if _re.search(r"\.(m3u8|mpd)$|(?:^|/)(?:hls|dash)(?:/|$)", path):
         return True
 
     # 3. Probe Content-Type via HEAD request (lightweight)

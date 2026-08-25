@@ -4,14 +4,16 @@ from ..structured_log import ctx_logger
 
 log = ctx_logger(__name__)
 
-@bot.on(events.CallbackQuery(pattern=rb"^cancel:"))
+@bot.on(events.CallbackQuery(pattern=rb"^(?:u)?cancel:"))
 async def handle_cancel(event):
     chat_id = event.chat_id
     sender_id = event.sender_id
 
-    # Extract the surl from callback data: "cancel:<surl>"
+    # Extract the key from callback data: "cancel:<surl>" / "ucancel:<url>"
+    # (ucancel payloads are full URLs — split on the FIRST colon only)
     data = event.data.decode("utf-8", errors="ignore")
-    surl = data.split(":", 1)[1] if ":" in data else None
+    _, _, key = data.partition(":")
+    surl = key or None
 
     log.info(
         f"Received cancel: chat_id={chat_id}, sender_id={sender_id}, "

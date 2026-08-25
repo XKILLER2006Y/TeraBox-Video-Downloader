@@ -11,8 +11,17 @@ def make_download_progress_cb(
     size_str: str,
     loop: asyncio.AbstractEventLoop,
     cancel_btn=None,
+    expected_total: int = 0,
 ) -> Callable[[int, int], None]:
-    """Create a progress callback for the download phase."""
+    """
+    Create a progress callback for the download phase.
+
+    HLS pipelines report total=0 (unknown until manifest parse). Without an
+    expected_total fallback the throttle predicate (`current < total`) is
+    always False and EVERY chunk from EVERY worker schedules a Telegram
+    edit — an edit flood that burns API budget. expected_total (from
+    metadata) restores both the percentage display and the 5s gate.
+    """
     last_update = [0.0]
 
     async def _update(text):
@@ -22,14 +31,16 @@ def make_download_progress_cb(
             pass
 
     def callback(current, total):
+        effective_total = total or expected_total
         now = time.time()
-        # Update every 5 seconds, or when the transfer is complete (current == total)
-        if (now - last_update[0] < 5) and (current < total):
+        # Throttle to one edit / 5s; always allow the final update through.
+        done = bool(effective_total) and current >= effective_total
+        if (now - last_update[0] < 5) and not done:
             return
         last_update[0] = now
-        pct = current / total * 100 if total else 0
+        pct = current / effective_total * 100 if effective_total else 0
         downloaded = format_size(current)
-        total_str = format_size(total) if total else size_str
+        total_str = format_size(effective_total) if effective_total else size_str
         text = (
             f"📦 **{filename}**\n"
             f"📐 Size: **{total_str}**\n\n"

@@ -27,20 +27,25 @@ async def cmd_random(event):
         await event.respond("📭 No videos yet. Send a TeraBox link first!")
         raise events.StopPropagation
 
-    surl, msg_id = random.choice(list(data.items()))
+    # Try up to 3 distinct entries — deleted storage messages otherwise act
+    # as permanent tombstones (there is no cache-delete API to prune them).
+    entries = list(data.items())
+    random.shuffle(entries)
     cached_msg = None
-    if STORAGE_GROUP_ID:
+    for surl, msg_id in entries[:3]:
+        if not STORAGE_GROUP_ID:
+            break
         try:
-            cached_msg = await bot.get_messages(STORAGE_GROUP_ID, ids=msg_id)
-            if cached_msg and not (cached_msg.video or (
-                cached_msg.document
-                and cached_msg.document.mime_type
-                and "video" in cached_msg.document.mime_type
-            )):
-                cached_msg = None
+            m = await bot.get_messages(STORAGE_GROUP_ID, ids=msg_id)
         except Exception as e:
             log.warning(f"Random fetch failed for surl={surl} msg_id={msg_id}: {e}")
-            cached_msg = None
+            continue
+        if m and (m.video or (
+            m.document and m.document.mime_type and "video" in m.document.mime_type
+        )):
+            cached_msg = m
+            break
+        log.warning(f"Tombstoned cache entry skipped: {surl}")
 
     if cached_msg is None:
         await event.respond("⚠️ Could not retrieve random video. Try again!")

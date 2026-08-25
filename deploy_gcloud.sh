@@ -80,7 +80,7 @@ done
 
 if [ "$MISSING_KEYS" -eq 1 ]; then
     echo ""
-    read -r -p "❓ Fill missing keys now? [y/N]: " ANSWER
+    read -r -p "❓ Fill missing keys now? [y/N]: " ANSWER || ANSWER=""
     if [[ "$ANSWER" == "y" || "$ANSWER" == "Y" ]]; then
         nano "$ENV_FILE"
     else

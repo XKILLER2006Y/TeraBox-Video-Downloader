@@ -130,6 +130,7 @@ async def helper(event, terabox_url: str, is_hd: bool, quality: str = DEFAULT_QU
         _cleanup_files(*paths)
 
     cancel_event = threading.Event()
+    acquired = False
     try:
         # Duplicate concurrent request guard (inside try so denials clean up)
         existing = active_tasks.get(task_key)
@@ -142,11 +143,12 @@ async def helper(event, terabox_url: str, is_hd: bool, quality: str = DEFAULT_QU
                 f"⏳ You already have **{USER_MAX_CONCURRENT}** download(s) running. "
                 "Wait for them to finish first (or they'll finish on their own).")
             return
+        acquired = True
 
         active_tasks[task_key] = cancel_event
 
         # — Phase 1: Cache lookup ——————————————————————————————————————————————————————————————
-        status = await _safe_send(event.respond, f"🔍 Checking cache for `{cache_key}`…")
+        status = await _safe_send(event.respond, f"🔍 Checking cache for `{surl}`…")
 
         cached_msg = await _find_cached_video(cache_key, user_mode)
         if cached_msg is not None:
@@ -235,7 +237,10 @@ async def helper(event, terabox_url: str, is_hd: bool, quality: str = DEFAULT_QU
         # — Phase 3: Download ——————————————————————————————————————————————————
         loop = asyncio.get_running_loop()
         dl_start = time.time()
-        dl_progress_cb = make_download_progress_cb(status, filename, size_str, loop, cancel_btn)
+        dl_progress_cb = make_download_progress_cb(
+            status, filename, size_str, loop, cancel_btn,
+            expected_total=int(info.get("size") or 0),
+        )
         try:
             filepath = await asyncio.to_thread(download_terabox_file_experimental, download_url, filename, cancel_event, dl_progress_cb)
         except CancelledError:
@@ -406,7 +411,8 @@ async def helper(event, terabox_url: str, is_hd: bool, quality: str = DEFAULT_QU
 
     finally:
         active_tasks.pop(task_key, None)
-        release_user_slot(chat_id, is_admin)
+        if acquired:
+            release_user_slot(chat_id, is_admin)
 
 
 # ── Multi-file picker ──────────────────────────────────────────────────────────
