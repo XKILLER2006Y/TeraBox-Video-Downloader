@@ -396,7 +396,7 @@ def download_from_stream_url(
         os.makedirs(output_dir, exist_ok=True)
 
     # Detect M3U8 manifest text (from chunk discovery — no file path, no URL)
-    if "#EXTM3U" in stream_url:
+    if stream_url.lstrip().startswith("#EXTM3U"):
         log.info("Detected M3U8 manifest text (inline)")
         if not output_file.lower().endswith(".mp4"):
             output_file = os.path.splitext(output_file)[0] + ".mp4"

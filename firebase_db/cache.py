@@ -36,9 +36,9 @@ log = logging.getLogger(__name__)
 
 # ── Types & constants ──────────────────────────────────────────────────────────────────────────
 
-MODE = Literal["get", "exp", "exphd", "dw"]
+MODE = Literal["get", "exp", "exphd", "dw", "dl"]
 _CACHE_COLLECTION = "cache"
-_BUCKETS = ("get", "exp", "exphd", "dw")
+_BUCKETS = ("get", "exp", "exphd", "dw", "dl")
 
 # ── In-memory snapshot for /random ────────────────────────────────────────────
 # Avoids a Firestore read on every /random call.

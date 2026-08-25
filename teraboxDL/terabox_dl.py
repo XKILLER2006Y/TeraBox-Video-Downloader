@@ -16,6 +16,7 @@ log = logging.getLogger(__name__)
 _cookie_cache: dict = {}  # cookies_str -> (is_valid, expiry)
 _cookie_cache_lock = threading.Lock()
 _COOKIE_CACHE_TTL = 300  # 5 minutes
+_COOKIE_CACHE_MAX = 50
 
 __all__ = [
     "TeraBoxDirectError",
@@ -180,6 +181,12 @@ class _CookiePool:
     def _cache_validity(self, cookies_str: str, is_valid: bool) -> None:
         with _cookie_cache_lock:
             _cookie_cache[cookies_str] = (is_valid, time.time() + _COOKIE_CACHE_TTL)
+            # Prune expired entries to prevent unbounded growth
+            if len(_cookie_cache) > _COOKIE_CACHE_MAX:
+                now = time.time()
+                expired = [k for k, v in _cookie_cache.items() if v[1] < now]
+                for k in expired:
+                    _cookie_cache.pop(k, None)
 
     def invalidate(self, cookies_str: str) -> None:
         """Mark a cookie invalid (rate-limited/expired) and skip it next time."""
@@ -448,19 +455,10 @@ def _discover_all_hls_chunks(
         now = time.time()
         # dp-logid is randomized per build — strip it or the cache never hits
         cache_key = url.split("dp-logid=")[0]
-        if cache_key in _response_cache:
-            cached_time, cached_text = _response_cache[cache_key]
-            if now - cached_time < _cache_ttl:
-                log.debug(f"HLS chunk discovery: using cached response for request {req_count}")
-                text = cached_text
-            else:
-                try:
-                    text = session.get(url, headers=_headers(session, surl, cookies_str), timeout=60).text.strip()
-                    _response_cache[cache_key] = (now, text)
-                except Exception as e:
-                    log.warning(f"HLS chunk discovery: error on request {req_count}: {e}")
-                    time.sleep(0.3)
-                    continue
+        cached = _response_cache.get(cache_key)
+        if cached and now - cached[0] < _cache_ttl:
+            log.debug(f"HLS chunk discovery: using cached response for request {req_count}")
+            text = cached[1]
         else:
             try:
                 text = session.get(url, headers=_headers(session, surl, cookies_str), timeout=60).text.strip()
@@ -472,7 +470,7 @@ def _discover_all_hls_chunks(
         
         # Clean old cache entries
         if len(_response_cache) > 10:
-            _response_cache = {k: v for k, v in _response_cache.items() if now - v[0] < _cache_ttl}
+            _response_cache.update({k: v for k, v in _response_cache.items() if now - v[0] < _cache_ttl})
         
         if not text.startswith("#EXTM3U"):
             time.sleep(0.05)
@@ -541,7 +539,8 @@ def _resolve_share(session, surl: str) -> tuple[dict, str]:
     """
     info = None
     rate_err: TeraBoxRateLimited | None = None
-    while True:
+    max_attempts = len(cookie_pool) + 1 if cookie_pool else 2
+    for _attempt in range(max_attempts):
         cookies_str = cookie_pool.acquire()
         if cookies_str is None:
             # Every configured cookie is exhausted → alert + surface error
@@ -696,7 +695,9 @@ def _get_video_metadata(terabox_url: str, quality: str = "M3U8_AUTO_1080", fs_id
     # low-quality share failed with 'Could not discover any video chunks'.
     _TIER_ORDER = ["M3U8_AUTO_1080", "M3U8_AUTO_720", "M3U8_AUTO_480"]
     quality_to_use = quality
-    if quality != "M3U8_AUTO_1080" and not _probe_quality(
+    # Always probe the requested quality first — saves the 100-request
+    # discovery budget if the tier is unavailable.
+    if not _probe_quality(
         session, shareid, uk, sign, timestamp, fs_id_val, surl, cookies_str or "", quality
     ):
         log.warning(f"Quality {quality} probe failed for surl={surl} — using AUTO_1080")

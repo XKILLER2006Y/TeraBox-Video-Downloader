@@ -37,7 +37,7 @@ _BROWSER_HEADERS = {
                   "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     "Accept": "*/*",
     "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
+    "Accept-Encoding": "gzip, deflate",
     "Connection": "keep-alive",
     "Sec-Fetch-Dest": "video",
     "Sec-Fetch-Mode": "no-cors",
@@ -266,9 +266,6 @@ def _download_video(
     progress_callback=None,
 ) -> None:
     session = _build_session()
-    # Use a per-request Referer header (don't mutate singleton)
-    parsed = urlparse(download_url)
-    referer = f"{parsed.scheme}://{parsed.netloc}/"  # noqa: F841 — used in _download_part headers
 
     # Check if the CDN supports byte-range requests
     total_size = _check_range_support(session, download_url)

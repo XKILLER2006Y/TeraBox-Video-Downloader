@@ -12,6 +12,9 @@ from contextlib import asynccontextmanager  # noqa: E402
 
 from telegram_logic.structured_log import setup_logging, ctx_logger  # noqa: E402
 
+setup_logging()
+log = ctx_logger(__name__)
+
 # ── CPython memory tuning (Cloud Shell: 2GB RAM) ─────────────────────────────────────────———————
 # Reduce GC frequency: gen0 threshold 700→1500, gen1→15, gen2→10
 # Fewer GC pauses = better throughput during bursty download/upload cycles.
@@ -72,9 +75,6 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 APP_ID = env_int("APP_ID")
 API_HASH = os.environ.get("API_HASH", "")
 STORAGE_GROUP_ID = env_int("STORAGE_GROUP_ID")
-
-setup_logging()
-log = ctx_logger(__name__)
 
 
 async def _run_batch(event, urls: list[str], processor) -> None:
@@ -271,11 +271,12 @@ async def lifespan(app: FastAPI):
     # ── Graceful shutdown: refuse new work, let in-flight downloads finish ──
     log.info("shutdown initiated — draining active tasks")
     telegram_logic_bot.shutting_down.set()
+    # Cancel cleanup loop first so it doesn't delete in-flight download files
+    cleanup_task.cancel()
     leftover = await telegram_logic_bot.drain_active_tasks(timeout=90.0)
     if leftover:
         log.warning("shutdown: tasks did not finish in time", extra={"leftover": leftover})
     mem_task.cancel()
-    cleanup_task.cancel()
     bot_task.cancel()
     try:
         await bot_task

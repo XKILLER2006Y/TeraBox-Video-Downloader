@@ -81,38 +81,3 @@ async def handle_dl(event):
     from telegram_logic.universal import process_universal
     logger.info(f"/dl [universal] {arg[:60]}")
     await process_universal(event, arg, bot)
-
-
-# ── Raw URL handler (no command prefix) ──────────────────────────────────────
-# When a user pastes a link without /dl, auto-detect and route.
-
-@bot.on(events.NewMessage(
-    pattern=r"https?://(?:www\.)?(?:1024tera(?:box)?\.com|terabox\.(?:com|app|fun)|"
-    r"terasharefile\.com|4funbox\.(?:com|co)|mirrobox\.com|nephobox\.com|"
-    r"momerybox\.com|tibibox\.com|freeterabox\.com|diskwala\.com|"
-    r"filesadda\.(?:site|club|link)|gofile\.io|streamtape\.com|"
-    r"dood\.(?:watch|wf|re)|mixdrop\.(?:co|to)|streamwish\.(?:to|xyz)|"
-    r"filelions\.(?:to|xyz)|files\.catbox\.me|mediafire\.com)"
-))
-async def handle_raw_url(event):
-    """Auto-detect and download when user pastes a raw URL (no /dl prefix)."""
-    text = event.message.text or ""
-    terabox_urls = extract_all_terabox_url_exp(text)
-
-    if terabox_urls:
-        from ..terabox_exp import process_terabox_experimental
-        urls, _ = cap_links(terabox_urls)
-        logger.info(f"auto-detect [terabox] {len(urls)} url(s)")
-        for url in urls[:1]:  # one at a time for raw pastes
-            await process_terabox_experimental(event, url)
-        return
-
-    diskwala_urls = extract_all_diskwala_urls(text)
-    if diskwala_urls:
-        from ..diskwala import process_diskwala
-        logger.info(f"auto-detect [diskwala] {len(diskwala_urls)} url(s)")
-        await process_diskwala(event, diskwala_urls[0])
-        return
-
-    # For other platforms, don't auto-trigger — let user use /dl explicitly
-    # (to avoid false positives on random URLs in conversations)

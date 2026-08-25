@@ -185,8 +185,7 @@ def parse_comp_flag(text: str) -> tuple[str, bool]:
     Extract the standalone `comp` keyword anywhere in the text (case-
     insensitive word). Returns (remaining_text, compress_bool).
     """
-    import re as _re
-    m = _re.search(r"(?i)(?:^|\s)comp(?:ress)?(?:\s|$)", text)
+    m = re.search(r"(?i)(?:^|\s)comp(?:ress)?(?:\s|$)", text)
     if not m:
         return text, False
     remaining = (text[: m.start()] + " " + text[m.end():]).strip()

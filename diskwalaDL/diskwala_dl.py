@@ -43,7 +43,11 @@ DISKWALA_DOWNLOAD_API = f"{DISKWALA_API_BASE}/download/d"
 DISKWALA_STATUS_API = f"{DISKWALA_API_BASE}/status?link="
 
 # AES-GCM key for decrypting _x responses (extracted from Mini App JS bundle)
-_DISKWALA_AES_KEY_HEX = "e7109544dab612bd5b80b8a427ac474ba5541b9efff7a4ca1c8ef85df2489c23"
+# Override via DISKWALA_AES_KEY_HEX env var if Diskwala rotates the key.
+_DISKWALA_AES_KEY_HEX = os.environ.get(
+    "DISKWALA_AES_KEY_HEX",
+    "e7109544dab612bd5b80b8a427ac474ba5541b9efff7a4ca1c8ef85df2489c23",
+)
 
 # Regex for Diskwala share URLs
 DISKWALA_URL_RE = re.compile(

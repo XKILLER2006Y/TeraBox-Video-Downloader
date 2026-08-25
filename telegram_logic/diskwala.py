@@ -175,6 +175,7 @@ async def _dw_helper(event, diskwala_url: str) -> None:
         except DiskwalaError as e:
             log.error(f"Diskwala metadata fetch failed for {link_id}: {e}")
             rate_limit.register_failure(chat_id)
+            stats_fail()
             await _safe_send(status.edit, f"❌ Failed to get video info: {e}")
             return
         except Exception as e:

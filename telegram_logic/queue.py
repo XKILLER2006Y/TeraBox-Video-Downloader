@@ -81,7 +81,7 @@ class MessageQueue:
 
             except FloodWaitError as e:
                 self.update_flood_until(e.seconds)
-                key = (id(event), url)
+                key = (event.chat_id, url)
                 tries = retry_counts.get(key, 0) + 1
                 if tries >= 3:
                     retry_counts.pop(key, None)
