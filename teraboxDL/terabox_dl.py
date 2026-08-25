@@ -141,10 +141,29 @@ class _CookiePool:
         self._cookies: list[tuple[int, str]] = []   # [(index, cookies_str)]
         self._pointer = 0
         self._lock = threading.Lock()
+
+        # Preferred: numbered COOKIES1..N (docker env_file silently keeps
+        # only the LAST of duplicate `COOKIES=` lines — a config that looked
+        # like 3 cookies was really zero reaching this pool).
         for i in range(1, max_cookies + 1):
             c = os.getenv(f"COOKIES{i}", "")
             if c:
                 self._cookies.append((i, c))
+
+        # Fallback: single COOKIES var holding multiple cookie strings
+        # separated by newlines or '||' (works with quoted multiline values).
+        if not self._cookies:
+            raw = os.getenv("COOKIES", "")
+            if raw:
+                parts = [p.strip() for p in
+                         raw.replace("||", "\n").splitlines() if p.strip()]
+                self._cookies = list(enumerate(parts, start=1))
+                if len(self._cookies) > 1:
+                    log.warning(
+                        "Single COOKIES var held %d cookies — switch to "
+                        "COOKIES1..%d in .env so docker does not drop them",
+                        len(self._cookies), len(self._cookies),
+                    )
 
     def __len__(self) -> int:
         return len(self._cookies)
