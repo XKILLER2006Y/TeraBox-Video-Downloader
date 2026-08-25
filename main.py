@@ -220,6 +220,7 @@ async def run_bot() -> None:
         BotCommand(command="random", description="Get a random video"),
         BotCommand(command="status", description="Bot health & stats"),
         BotCommand(command="history", description="Your recent downloads"),
+        BotCommand(command="stats", description="Your download statistics"),
         BotCommand(command="settings", description="View Details"),
         BotCommand(command="op", description="Send feedback to admin"),
     ]

@@ -209,12 +209,15 @@ def get_all_users() -> dict[str, dict]:
 _HISTORY_LIMIT = 20  # entries kept per user
 
 
-def record_history(chat_id: int, title: str, key: str) -> None:
+def record_history(chat_id: int, title: str, key: str, size: int = 0) -> None:
     """
-    Append a completed download to the user's history (kept to last 20).
+    Append a completed download to the user's history (kept to last 20)
+    and bump the user's lifetime counters (dl_count / dl_bytes).
 
     Stored on the user document as:
         history: [ {"t": <title>, "k": <surl/link-id>, "at": <unix>}, ... ]
+        dl_count: int   (lifetime completed downloads)
+        dl_bytes: int   (lifetime bytes downloaded)
 
     Best-effort: failures are logged, never raised.
     """
@@ -231,14 +234,43 @@ def record_history(chat_id: int, title: str, key: str) -> None:
 
         updated = (list(existing) + [entry])[-_HISTORY_LIMIT:]
 
+        payload = {"history": updated}
+        try:
+            from google.cloud.firestore_v1 import Increment  # noqa: PLC0415
+            payload["dl_count"] = Increment(1)
+            if size and size > 0:
+                payload["dl_bytes"] = Increment(int(size))
+        except ImportError:
+            pass
+
         get_db().collection(_USERS_COLLECTION).document(uid).set(
-            {"history": updated}, merge=True
+            payload, merge=True
         )
         # Keep cache coherent
         _USERS_CACHE.setdefault(uid, {})["history"] = updated
         log.debug(f"History recorded for {uid}: {entry['t']}")
     except Exception as e:
         log.warning(f"[DB] record_history failed for {uid}: {e}")
+
+
+def get_user_stats(chat_id: int) -> dict:
+    """
+    Return the user's lifetime counters: {"dl_count": int, "dl_bytes": int}.
+    Zeros on error/absence. Never raises.
+    """
+    uid = str(chat_id)
+    result = {"dl_count": 0, "dl_bytes": 0}
+    try:
+        snap = get_db().collection(_USERS_COLLECTION).document(uid).get(
+            ["dl_count", "dl_bytes"]
+        )
+        if snap.exists:
+            data = snap.to_dict() or {}
+            result["dl_count"] = int(data.get("dl_count", 0))
+            result["dl_bytes"] = int(data.get("dl_bytes", 0))
+    except Exception as e:
+        log.warning(f"[DB] get_user_stats failed for {uid}: {e}")
+    return result
 
 
 def get_history(chat_id: int) -> list[dict]:

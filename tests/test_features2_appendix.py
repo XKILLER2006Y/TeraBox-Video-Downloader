@@ -81,7 +81,18 @@ class _Doc2:
     def get(self, fields=None):
         return _Snap2(stored.get(self.uid, {}), self.uid in stored)
     def set(self, payload, merge=False):
-        stored.setdefault(self.uid, {}).update(payload)
+        # emulate Firestore: Increment(x) applied on merge
+        doc = stored.setdefault(self.uid, {})
+        def _is_inc(v):
+            return hasattr(v, "value") and not isinstance(v, (str, bytes))
+        for k, v in payload.items():
+            if _is_inc(v):
+                doc[k] = doc.get(k, 0) + v.value
+            else:
+                doc[k] = v
+
+class _Inc:
+    def __init__(self, n): self.value = n
 
 class _Col2:
     def document(self, uid): return _Doc2(uid)
@@ -193,6 +204,38 @@ check("context propagates to child tasks", any(
 
 # restore default logging so later output stays clean
 setup_logging(log_file="/tmp/opencode/sl_default.log")
+
+
+# ── 19. Inline mode & user stats ──────────────────────────────────────────────
+group("Inline mode & user stats")
+from telegram_logic.commands.inline import first_url
+
+check("inline url extract: terabox link",
+      first_url("check this https://1024tera.com/s/1AbCdEf example") == "https://1024tera.com/s/1AbCdEf")
+check("inline url extract: none", first_url("just chatting") is None)
+check("inline url extract: empty", first_url("") is None)
+
+# per-user counters in users layer (reuse fake db from history group)
+U2.get_db = lambda: _DB2()
+U2._USERS_CACHE.clear()
+for i in range(3):
+    U2.record_history(5001, f"v{i}.mp4", f"k{i}", size=1000 * (i + 1))
+st = U2.get_user_stats(5001)
+check("dl_count increments per download", st["dl_count"] == 3)
+check("dl_bytes accumulates sizes", st["dl_bytes"] == 6000)
+missing = U2.get_user_stats(999999)
+check("unknown user reads zeros", missing == {"dl_count": 0, "dl_bytes": 0})
+
+from telegram_logic.commands.stats import build_stats_text
+txt = build_stats_text({"dl_count": 7, "dl_bytes": 1536}, 5, "exp")
+check("user stats text renders", "Downloads:** 7" in txt and "1.5 KB" in txt and "TeraBox" in txt)
+admin_txt = build_stats_text(
+    {"dl_count": 1, "dl_bytes": 10}, 1, "dw",
+    {"today": {"ok": 3, "fail": 1, "bytes": 0}, "totals": {"ok": 30, "fail": 2, "bytes": 2048}},
+)
+check("admin stats include global block", "Global**" in admin_txt and "Today: 3 ✓ · 1 ✗" in admin_txt)
+
+
 print(f"\n{'=' * 54}")
 print(f"Results: {PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

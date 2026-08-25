@@ -15,6 +15,7 @@ from . import rate_limit
 from . import alerts
 from firebase_db.cache import add_to_cache
 from firebase_db.stats import record_success as stats_ok, record_failure as stats_fail
+from firebase_db.users import record_history
 from .progress_callbacks import make_download_progress_cb, make_upload_progress_cb
 from .structured_log import ctx_logger, bind_context, new_request_id
 
@@ -343,7 +344,9 @@ async def _dw_helper(event, diskwala_url: str) -> None:
                     log.warning(f"Could not delete local file {f_path}: {e}")
 
         rate_limit.register_success(chat_id)
-        stats_ok(os.path.getsize(filepath) if filepath and os.path.exists(filepath) else 0)
+        file_size = os.path.getsize(filepath) if filepath and os.path.exists(filepath) else 0
+        stats_ok(file_size)
+        await asyncio.to_thread(record_history, chat_id, filename, link_id, file_size)
 
         try:
             await _safe_send(status.delete)

@@ -360,8 +360,9 @@ async def helper(event, terabox_url: str, is_hd: bool, quality: str = DEFAULT_QU
 
         _cleanup_all(filepath)
         rate_limit.register_success(chat_id)
-        stats_ok(os.path.getsize(filepath) if filepath and os.path.exists(filepath) else 0)
-        await asyncio.to_thread(record_history, chat_id, filename, cache_key)
+        file_size = os.path.getsize(filepath) if filepath and os.path.exists(filepath) else 0
+        stats_ok(file_size)
+        await asyncio.to_thread(record_history, chat_id, filename, cache_key, file_size)
 
         try:
             await _safe_send(status.delete)
