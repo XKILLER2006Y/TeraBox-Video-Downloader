@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install ruff
+
+      - name: Ruff lint
+        run: ruff check .
+
+      - name: Compile all .py
+        run: python -m compileall -q .
+
+      - name: Unit tests
+        env:
+          BOT_TOKEN: ci-token
+          APP_ID: "12345"
+          API_HASH: ci-hash
+        run: |
+          python tests/test_new_features.py
+          python tests/test_features2.py
+          python tests/test_features2_appendix.py
