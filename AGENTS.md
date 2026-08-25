@@ -95,6 +95,8 @@ python main.py
 | `/dl <url>` | Download from any supported host (GoFile, StreamTape, Dood, MediaFire, …) |
 | `/random` | Random video from cache |
 | `/status` | Bot health & stats (admin detail when sent by ADMIN_ID) |
+| `/stats` | Your personal download stats (admins also see global) |
+| `/history` | Your recent downloads |
 | `/settings` | View/set download mode |
 | `/op <message>` | Send feedback to admin |
 | `/recent` | [Admin] Show recent users |
@@ -105,6 +107,10 @@ python main.py
 - **exp** — TeraBox via direct HLS chunk discovery (default)
 - **exphd** — TeraBox direct HD (requires premium cookies)
 - **dw** — Diskwala via Telethon Mini App or proxy
+
+**Inline mode** — after enabling *Inline Mode* via @BotFather, users can
+type `@botusername <link>` in any chat; selecting the result posts the
+link and triggers the normal download pipeline.
 
 > The legacy **get** mode (proxy pipeline) was removed along with the old
 > `terabox/` module. Users whose saved mode was `get` are transparently
