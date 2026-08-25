@@ -268,6 +268,7 @@ async def _storage_cleanup_loop():
     while True:
         try:
             await asyncio.sleep(120)  # Every 2 minutes (Cloud Shell: 5GB disk)
+            telegram_logic_bot.last_heartbeat = time.time()
             now = time.time()
             cleaned = 0
             for f in glob.glob(os.path.join(storage_dir, "*")):

@@ -71,7 +71,7 @@ shutting_down = threading.Event()
 
 # Bot process start time (for /status uptime)
 START_TIME = time.time()
-last_heartbeat = 0.0  # updated by main's memory monitor; /health checks staleness
+last_heartbeat = time.time()  # bumped by background loops; /health fails when stale
 
 
 async def drain_active_tasks(timeout: float = 60.0) -> int:
