@@ -287,3 +287,49 @@ def get_history(chat_id: int) -> list[dict]:
     except Exception as e:
         log.warning(f"[DB] get_history failed for {uid}: {e}")
     return []
+
+
+# ── Daily download quota ─────────────────────────────────────────────────────
+def _today_key() -> str:
+    return time.strftime("%Y-%m-%d", time.gmtime())
+
+
+def get_today_count(chat_id: int) -> int:
+    """
+    Downloads completed by this user today (UTC). 0 on error/absence.
+    """
+    uid = str(chat_id)
+    try:
+        snap = get_db().collection(_USERS_COLLECTION).document(uid).get(["daily"])
+        if snap.exists:
+            daily = (snap.to_dict() or {}).get("daily") or {}
+            if daily.get("d") == _today_key():
+                return int(daily.get("n", 0))
+    except Exception as e:
+        log.warning(f"[DB] get_today_count failed for {uid}: {e}")
+    return 0
+
+
+def bump_today(chat_id: int) -> None:
+    """
+    Count one completed download toward today's quota (UTC day key).
+
+    Uses a single set() with Increment when the stored date matches today,
+    otherwise resets the counter. Best-effort.
+    """
+    uid = str(chat_id)
+    today = _today_key()
+    try:
+        snap = get_db().collection(_USERS_COLLECTION).document(uid).get(["daily"])
+        daily = ((snap.to_dict() or {}).get("daily") or {}) if snap.exists else {}
+
+        from google.cloud.firestore_v1 import Increment
+
+        if daily.get("d") == today:
+            payload = {"daily": {"d": today, "n": Increment(1)}}
+        else:
+            payload = {"daily": {"d": today, "n": 1}}
+
+        get_db().collection(_USERS_COLLECTION).document(uid).set(payload, merge=True)
+    except Exception as e:
+        log.warning(f"[DB] bump_today failed for {uid}: {e}")

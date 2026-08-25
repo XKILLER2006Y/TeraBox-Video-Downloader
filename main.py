@@ -221,6 +221,7 @@ async def run_bot() -> None:
         BotCommand(command="status", description="Bot health & stats"),
         BotCommand(command="history", description="Your recent downloads"),
         BotCommand(command="stats", description="Your download statistics"),
+        BotCommand(command="mp3", description="Extract audio from a TeraBox video"),
         BotCommand(command="settings", description="View Details"),
         BotCommand(command="op", description="Send feedback to admin"),
     ]

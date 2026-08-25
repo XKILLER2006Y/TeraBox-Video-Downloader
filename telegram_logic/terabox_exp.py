@@ -12,7 +12,7 @@ from .helpers import format_size, format_duration, extract_surl_exp, check_size_
 from . import rate_limit
 from firebase_db.cache import add_to_cache
 from firebase_db.stats import record_success as stats_ok, record_failure as stats_fail
-from firebase_db.users import record_history
+from firebase_db.users import record_history, get_today_count, bump_today
 from .progress_callbacks import make_download_progress_cb, make_upload_progress_cb
 from .structured_log import ctx_logger, bind_context, new_request_id
 
@@ -21,6 +21,7 @@ from teraboxDL.public_api import download_terabox_file_experimental
 from teraboxDL.terabox_dl import get_video_info
 
 ADMIN_ID = env_int("ADMIN_ID")
+DAILY_LIMIT_PER_USER = env_int("DAILY_LIMIT_PER_USER", 0)
 
 log = ctx_logger(__name__)
 
@@ -45,6 +46,17 @@ async def process_terabox_experimental(
     if blocked:
         await _safe_send(event.respond, blocked)
         return
+
+    # Daily download quota (0 = unlimited)
+    if DAILY_LIMIT_PER_USER > 0 and not (ADMIN_ID and event.chat_id == ADMIN_ID):
+        used = await asyncio.to_thread(get_today_count, event.chat_id)
+        if used >= DAILY_LIMIT_PER_USER:
+            await _safe_send(
+                event.respond,
+                f"📊 **Daily limit reached** ({used}/{DAILY_LIMIT_PER_USER} downloads).\n"
+                "The counter resets at midnight UTC. Come back tomorrow!",
+            )
+            return
 
     # If currently in flood cooldown → queue immediately
     rem = terabox_queue.flood_remaining()
@@ -363,6 +375,7 @@ async def helper(event, terabox_url: str, is_hd: bool, quality: str = DEFAULT_QU
         file_size = os.path.getsize(filepath) if filepath and os.path.exists(filepath) else 0
         stats_ok(file_size)
         await asyncio.to_thread(record_history, chat_id, filename, cache_key, file_size)
+        await asyncio.to_thread(bump_today, chat_id)
 
         try:
             await _safe_send(status.delete)

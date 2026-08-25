@@ -8,6 +8,7 @@ import asyncio
 import logging
 import os
 import sys
+import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -83,13 +84,15 @@ class _Doc2:
     def set(self, payload, merge=False):
         # emulate Firestore: Increment(x) applied on merge
         doc = stored.setdefault(self.uid, {})
-        def _is_inc(v):
-            return hasattr(v, "value") and not isinstance(v, (str, bytes))
+        def _apply(old, v):
+            if hasattr(v, "value") and not isinstance(v, (str, bytes)):
+                return (old or 0) + v.value
+            if isinstance(v, dict):
+                base = old if isinstance(old, dict) else {}
+                return {k2: _apply(base.get(k2, 0), v2) for k2, v2 in v.items()}
+            return v
         for k, v in payload.items():
-            if _is_inc(v):
-                doc[k] = doc.get(k, 0) + v.value
-            else:
-                doc[k] = v
+            doc[k] = _apply(doc.get(k), v)
 
 class _Inc:
     def __init__(self, n): self.value = n
@@ -234,6 +237,51 @@ admin_txt = build_stats_text(
     {"today": {"ok": 3, "fail": 1, "bytes": 0}, "totals": {"ok": 30, "fail": 2, "bytes": 2048}},
 )
 check("admin stats include global block", "Global**" in admin_txt and "Today: 3 ✓ · 1 ✗" in admin_txt)
+
+
+# ── 20. MP3, daily quota, deep-link start ─────────────────────────────────────
+group("MP3 / quota / deep-link")
+import subprocess as _sp
+from telegram_logic.commands.mp3 import _convert_to_mp3, _strip_ext
+from telegram_logic.commands.start import WELCOME_MESSAGE
+
+check("welcome no longer mentions removed /get", "/get" not in WELCOME_MESSAGE)
+check("welcome mentions /mp3 and /stats", "/mp3" in WELCOME_MESSAGE and "/stats" in WELCOME_MESSAGE)
+
+check("strip_ext removes extension", _strip_ext("movie.hd.mp4") == "movie.hd")
+check("strip_ext safe on bare name", _strip_ext("noext") == "noext")
+
+# real ffmpeg round-trip: generate 1s tone -> mp4 container via lavfi, then convert
+with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tf:
+    tone_path = tf.name
+gen = _sp.run(
+    ["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi",
+     "-i", "sine=frequency=440:duration=1", "-acodec", "aac", tone_path],
+    capture_output=True, text=True,
+)
+if gen.returncode == 0:
+    mp3_out = _convert_to_mp3(tone_path)
+    check("ffmpeg converts aac -> mp3", os.path.exists(mp3_out) and os.path.getsize(mp3_out) > 1000)
+    bad = _sp.run(["ffprobe", "-v", "quiet", "-show_entries",
+                   "stream=codec_name", "-of", "csv=p=0", mp3_out],
+                  capture_output=True, text=True)
+    check("output really is mp3 codec", bad.stdout.strip() == "mp3")
+    os.remove(tone_path)
+    os.remove(mp3_out)
+else:
+    check("ffmpeg available in test env", False, detail=gen.stderr[:120])
+
+# daily quota helpers against the fake db
+U2.get_db = lambda: _DB2()
+U2._USERS_CACHE.clear()
+check("today count starts at zero", U2.get_today_count(6001) == 0)
+for _ in range(4):
+    U2.bump_today(6001)
+check("bump_today accumulates", U2.get_today_count(6001) == 4)
+check("users isolated in quota", U2.get_today_count(6002) == 0)
+# stale date resets
+stored.setdefault("6003", {})["daily"] = {"d": "1999-01-01", "n": 50}
+check("stale date ignored", U2.get_today_count(6003) == 0)
 
 
 print(f"\n{'=' * 54}")
