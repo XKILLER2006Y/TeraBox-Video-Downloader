@@ -15,6 +15,7 @@ from firebase_db.stats import record_success as stats_ok, record_failure as stat
 from firebase_db.users import record_history, get_today_count, bump_today
 from .progress_callbacks import make_download_progress_cb, make_upload_progress_cb
 from .structured_log import ctx_logger, bind_context, new_request_id
+from .compress import maybe_compress
 
 from teraboxDL.errors import TeraBoxError, CancelledError, TeraBoxDirectError, TeraBoxMultipleChoice
 from teraboxDL.public_api import download_terabox_file_experimental
@@ -34,6 +35,7 @@ async def process_terabox_experimental(
     is_hd: bool = False,
     quality: str | None = None,
     fs_id: int | None = None,
+    compress: bool = False,
 ) -> None:
     rid = new_request_id()
     bind_context(request_id=rid, user_id=event.chat_id, download_id=rid)
@@ -62,7 +64,7 @@ async def process_terabox_experimental(
     rem = terabox_queue.flood_remaining()
     if rem > 0:
         ahead = terabox_queue.pending
-        await terabox_queue.put(helper, event, terabox_url, is_hd, quality or DEFAULT_QUALITY, fs_id)
+        await terabox_queue.put(helper, event, terabox_url, is_hd, quality or DEFAULT_QUALITY, fs_id, compress)
         try:
             pos = f" (position {ahead + 1})" if ahead else ""
             await event.respond(
@@ -78,11 +80,11 @@ async def process_terabox_experimental(
     # Try processing normally under the semaphore
     async with terabox_queue.semaphore:
         try:
-            await helper(event, terabox_url, is_hd, quality or DEFAULT_QUALITY, fs_id)
+            await helper(event, terabox_url, is_hd, quality or DEFAULT_QUALITY, fs_id, compress)
         except FloodWaitError as e:
             # Pipeline hit flood → set cooldown, queue, notify user
             terabox_queue.update_flood_until(e.seconds)
-            await terabox_queue.put(helper, event, terabox_url, is_hd, quality or DEFAULT_QUALITY, fs_id)
+            await terabox_queue.put(helper, event, terabox_url, is_hd, quality or DEFAULT_QUALITY, fs_id, compress)
             try:
                 await event.respond(
                     f"⏳ Bot overloaded! Your request has been queued "
@@ -92,7 +94,7 @@ async def process_terabox_experimental(
                 pass
 
 
-async def helper(event, terabox_url: str, is_hd: bool, quality: str = DEFAULT_QUALITY, fs_id: int | None = None) -> None:
+async def helper(event, terabox_url: str, is_hd: bool, quality: str = DEFAULT_QUALITY, fs_id: int | None = None, compress: bool = False) -> None:
     """Inner pipeline, runs under the concurrency semaphore."""
     chat_id = event.chat_id
     surl = extract_surl_exp(terabox_url)
@@ -255,6 +257,13 @@ async def helper(event, terabox_url: str, is_hd: bool, quality: str = DEFAULT_QU
             _cleanup_all(filepath)
             await _safe_send(status.edit, "🚫 Cancelled.")
             return
+
+        # — Phase 3b: optional H.264 compression ————————————————————————————
+        if compress:
+            await _safe_send(status.edit, "🗜️ Compressing video… (this can take a while)")
+            filepath, saved_note = await asyncio.to_thread(maybe_compress, filepath, cancel_event)
+            if saved_note:
+                log.info("compression done", extra={"note": saved_note})
 
         # Use actual file size (compressed TS/MP4) instead of original API size
         size_str = format_size(os.path.getsize(filepath))

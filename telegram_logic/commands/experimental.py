@@ -1,6 +1,6 @@
 from telethon import events
 from ..bot import bot
-from ..helpers import extract_all_terabox_url_exp, parse_quality, cap_links, DEFAULT_QUALITY
+from ..helpers import parse_comp_flag,  extract_all_terabox_url_exp, parse_quality, cap_links, DEFAULT_QUALITY
 from ..terabox_exp import process_terabox_experimental, _b64d
 from ..structured_log import ctx_logger
 from diskwalaDL.public_api import extract_all_diskwala_urls
@@ -20,13 +20,17 @@ _USAGE = (
 log = ctx_logger(__name__)
 
 
+COMP_HINT = "\n💡 Add **comp** to shrink the video: `/exp <link> 720p comp`"
+
+
 @bot.on(events.NewMessage(pattern=r"^/exp(?:@\S+)?(?:\s+([\s\S]+))?$"))
 async def cmd_get_exp(event):
     log.info(f"Received /exp command from chat {event.chat_id}")
 
     arg = (event.pattern_match.group(1) or "").strip()
 
-    # Optional trailing quality token: "/exp <url> 720p"
+    # Optional flags & trailing quality token: "/exp <url> 720p comp"
+    arg, compress = parse_comp_flag(arg)
     arg, quality = parse_quality(arg)
 
     terabox_url_list = extract_all_terabox_url_exp(arg) if arg else []
@@ -35,7 +39,7 @@ async def cmd_get_exp(event):
         if extract_all_diskwala_urls(arg):
             await event.respond(_DISKWALA_HINT)
         else:
-            await event.respond(_USAGE)
+            await event.respond(_USAGE + COMP_HINT)
         raise events.StopPropagation
 
     urls, dropped = cap_links(terabox_url_list)
@@ -45,7 +49,7 @@ async def cmd_get_exp(event):
             f"Send the rest in a follow-up message."
         )
     for terabox_url in urls:
-        await process_terabox_experimental(event, terabox_url, quality=quality)
+        await process_terabox_experimental(event, terabox_url, quality=quality, compress=compress)
 
     raise events.StopPropagation
 

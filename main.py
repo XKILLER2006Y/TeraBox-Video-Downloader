@@ -23,6 +23,7 @@ os.environ.setdefault("MALLOC_TRIM_THRESHOLD_", "65536")
 os.environ.setdefault("MALLOC_MMAP_THRESHOLD_", "65536")
 
 from fastapi import FastAPI  # noqa: E402
+from fastapi.responses import HTMLResponse, JSONResponse  # noqa: E402
 import uvicorn  # noqa: E402
 from telethon import events  # noqa: E402
 from telethon.tl.functions.bots import SetBotCommandsRequest  # noqa: E402
@@ -286,6 +287,7 @@ async def _memory_monitor_loop():
     while True:
         try:
             await asyncio.sleep(300)
+            telegram_logic_bot.last_heartbeat = time.time()
             kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
             log.info("memory snapshot", extra={"peak_rss_mb": kb // 1024})
             # Manual GC sweep + compact after logging — reclaims fragmented memory
@@ -323,6 +325,112 @@ app = FastAPI(lifespan=lifespan)
 @app.get("/ping")
 async def ping():
     return "pong"
+
+
+# — Deep healthcheck ————————————————————————————————————————————————————————————————
+
+@app.get("/health")
+async def health():
+    """Container-grade health: 200 only when the bot is connected and loops tick."""
+    connected = bot.is_connected()
+    hb_age = time.time() - telegram_logic_bot.last_heartbeat
+    healthy = connected and hb_age < 600
+    return JSONResponse(
+        status_code=200 if healthy else 503,
+        content={
+            "status": "ok" if healthy else "degraded",
+            "connected": connected,
+            "heartbeat_age_s": round(hb_age, 1),
+            "uptime_s": round(time.time() - telegram_logic_bot.START_TIME),
+        },
+    )
+
+
+# — Live dashboard (opt-in via DASHBOARD_TOKEN) —————————————————————————————————————
+
+DASHBOARD_TOKEN = os.environ.get("DASHBOARD_TOKEN", "")
+
+_DASH_HTML = """<!doctype html>
+<html><head><meta charset=utf-8><title>Bot Dashboard</title>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<style>
+body{font-family:ui-monospace,monospace;background:#0d1117;color:#c9d1d9;margin:0;padding:24px}
+h1{font-size:18px;color:#58a6ff}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin:16px 0}
+.card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:14px}
+.card .v{font-size:26px;font-weight:700;color:#3fb950}.card .l{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:#8b949e}
+.warn .v{color:#d29922}table{width:100%;border-collapse:collapse;font-size:13px}
+td,th{text-align:left;padding:6px 10px;border-bottom:1px solid #21262d}th{color:#8b949e}
+.ok{color:#3fb950}.bad{color:#f85149}.refreshed{font-size:11px;color:#8b949e}
+</style></head><body>
+<h1>🤖 TeraBox Bot — Live</h1>
+<div class=refreshed id=ref>connecting…</div>
+<div class=grid id=cards></div>
+<h1 style=font-size:14px>Cookie pool</h1><table id=t></table>
+<script>
+const tok=new URLSearchParams(location.search).get('t')||'';
+async function tick(){
+ try{
+  const r=await fetch('/api/stats?t='+tok);if(!r.ok)throw 0;
+  const d=await r.json();
+  document.getElementById('ref').textContent='updated '+new Date().toLocaleTimeString();
+  const c=(l,v,warn)=>`<div class="card ${warn?'warn':''}"><div class=v>${v}</div><div class=l>${l}</div></div>`;
+  document.getElementById('cards').innerHTML=
+    c('uptime',d.uptime)+c('active downloads',d.active,d.active>=5)+
+    c('queue',d.queue,d.queue>5)+c('memory (rss)',d.mem)+
+    c('today ✓',d.today_ok)+c('today ✗',d.today_fail,d.today_fail>d.today_ok);
+  document.getElementById('t').innerHTML='<tr><th>cookie</th><th>state</th><th>failures</th></tr>'+
+    d.cookies.map(k=>`<tr><td>${k.name}</td><td class="${k.state=='healthy'?'ok':'bad'}">${k.state}</td><td>${k.fails}</td></tr>`).join('')
+    ||'<tr><td colspan=3>no cookies configured</td></tr>';
+ }catch(e){document.getElementById('ref').textContent='fetch failed — check DASHBOARD_TOKEN';}
+}
+tick();setInterval(tick,3000);
+</script></body></html>"""
+
+
+@app.get("/dash", response_class=HTMLResponse)
+async def dash(t: str = ""):
+    if not DASHBOARD_TOKEN:
+        return HTMLResponse("<h1>Dashboard disabled</h1><p>Set DASHBOARD_TOKEN in .env to enable.</p>", status_code=404)
+    if t != DASHBOARD_TOKEN:
+        return HTMLResponse("<h1>403</h1>", status_code=403)
+    return HTMLResponse(_DASH_HTML)
+
+
+@app.get("/api/stats")
+async def api_stats(t: str = ""):
+    if not DASHBOARD_TOKEN or t != DASHBOARD_TOKEN:
+        return JSONResponse(status_code=403, content={"error": "forbidden"})
+
+    from firebase_db.stats import get_stats as _gs
+
+    def _fmt_uptime(sec: float) -> str:
+        d, rem = divmod(int(sec), 86400)
+        h, rem = divmod(rem, 3600)
+        m, _ = divmod(rem, 60)
+        return f"{d}d {h}h {m}m" if d else (f"{h}h {m}m" if h else f"{m}m")
+
+    kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    gs = await asyncio.to_thread(_gs)
+
+    from teraboxDL.terabox_dl import cookie_pool_health
+
+    return {
+        "uptime": _fmt_uptime(time.time() - telegram_logic_bot.START_TIME),
+        "active": len(active_tasks_ref()),
+        "queue": terabox_queue_ref(),
+        "mem": f"{int(kb // 1024)}MB",
+        "today_ok": gs["today"]["ok"],
+        "today_fail": gs["today"]["fail"],
+        "cookies": await asyncio.to_thread(cookie_pool_health),
+    }
+
+
+def active_tasks_ref():
+    return telegram_logic_bot.active_tasks
+
+
+def terabox_queue_ref() -> int:
+    return telegram_logic_bot.terabox_queue.pending
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=env_int("PORT", 3000))

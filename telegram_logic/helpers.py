@@ -150,6 +150,19 @@ QUALITY_MAP: dict[int, str] = {
 DEFAULT_QUALITY = "M3U8_AUTO_1080"
 
 
+def parse_comp_flag(text: str) -> tuple[str, bool]:
+    """
+    Extract the standalone `comp` keyword anywhere in the text (case-
+    insensitive word). Returns (remaining_text, compress_bool).
+    """
+    import re as _re
+    m = _re.search(r"(?i)(?:^|\s)comp(?:ress)?(?:\s|$)", text)
+    if not m:
+        return text, False
+    remaining = (text[: m.start()] + " " + text[m.end():]).strip()
+    return remaining, True
+
+
 def parse_quality(text: str) -> tuple[str, str]:
     """
     Extract a trailing quality token (e.g. `720` / `720p`) from the end of

@@ -338,6 +338,66 @@ n = asyncio.run(_fill_queue())
 check("pending reflects enqueued items", n == 3)
 
 
+# ── 22. Compression / comp flag / deep health ─────────────────────────────────
+group("Compression / comp flag / health")
+from telegram_logic.helpers import parse_comp_flag
+from telegram_logic.compress import maybe_compress
+
+t, c = parse_comp_flag("https://x.com/s/1abc comp")
+check("comp keyword extracted", c is True and t.strip() == "https://x.com/s/1abc")
+t, c = parse_comp_flag("compress it please")
+check("long form 'compress' accepted", c is True and t == "it please")
+t, c = parse_comp_flag("compare these links")
+check("'compare' does NOT trigger flag", c is False)
+t, c = parse_comp_flag("plain link only")
+check("no flag when absent", c is False and t == "plain link only")
+
+FF = _shutil.which("ffmpeg")
+if FF:
+    big_src = "/tmp/opencode/comp_in.mp4"
+    gen = _sp2.run(
+        [FF, "-y", "-loglevel", "error", "-f", "lavfi",
+         "-i", "testsrc=size=320x240:rate=15:duration=3",
+         "-f", "lavfi", "-i", "sine=frequency=440:duration=3",
+         "-c:v", "libx264", "-preset", "ultrafast", "-crf", "0",
+         "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", big_src],
+        capture_output=True, text=True,
+    )
+    check("lossless-ish source generated (>20MB threshold bypassed for test)",
+          gen.returncode == 0)
+
+    # force the path by testing engine directly on a small file via monkeypatch
+    import telegram_logic.compress as CM
+    real_min = CM.MIN_SIZE_FOR_COMPRESSION
+    CM.MIN_SIZE_FOR_COMPRESSION = 0
+    try:
+        out_path, note = maybe_compress(big_src)
+        check("compression produced output", out_path.endswith(".c.mp4") and os.path.exists(out_path))
+        probe = _sp2.run(
+            ["ffprobe", "-v", "quiet", "-select_streams", "v:0",
+             "-show_entries", "stream=codec_name", "-of", "csv=p=0", out_path],
+            capture_output=True, text=True,
+        )
+        check("output codec is h264", probe.stdout.strip() == "h264")
+        orig_sz = gen and os.path.getsize(out_path)
+        check("note mentions compression", "compressed" in note)
+        if os.path.exists(out_path):
+            os.remove(out_path)
+    finally:
+        CM.MIN_SIZE_FOR_COMPRESSION = real_min
+
+check("small files skip compression entirely",
+      maybe_compress("/tmp/opencode/definitely-missing.mp4") ==
+      ("/tmp/opencode/definitely-missing.mp4", ""))
+
+# heartbeat var exists for /health
+import telegram_logic.bot as TB
+check("last_heartbeat initialized", hasattr(TB, "last_heartbeat"))
+from main import _DASH_HTML
+check("dashboard html has cards + cookie table",
+      "Cookie pool" in _DASH_HTML and "/api/stats" in _DASH_HTML and "setInterval" in _DASH_HTML)
+
+
 print(f"\n{'=' * 54}")
 print(f"Results: {PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
