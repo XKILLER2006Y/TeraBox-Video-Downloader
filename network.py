@@ -22,6 +22,16 @@ log = logging.getLogger(__name__)
 _TCP_NODELAY = True
 _RECV_BUFFER = int(os.environ.get("TCP_RECV_BUFFER", "65536"))
 
+# Advertise brotli only when a decoder is importable — advertising br
+# without the lib makes servers send compressed bytes requests can't
+# decode, and r.text becomes binary garbage (FilesAdda outage root cause).
+try:
+    import brotli  # noqa: F401
+
+    _ACCEPT_ENCODING = "gzip, deflate, br"
+except ImportError:
+    _ACCEPT_ENCODING = "gzip, deflate"
+
 _browser_headers = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -29,7 +39,7 @@ _browser_headers = {
     ),
     "Accept": "*/*",
     "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
+    "Accept-Encoding": _ACCEPT_ENCODING,
     "Connection": "keep-alive",
 }
 
