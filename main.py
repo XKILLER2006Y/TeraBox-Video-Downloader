@@ -40,6 +40,8 @@ from diskwalaDL.public_api import extract_all_diskwala_urls  # noqa: E402
 from universalDL import extract_universal_urls  # noqa: E402
 from telegram_logic.universal import process_universal  # noqa: E402
 from telegram_logic.social_dl import extract_all_social_urls, process_social  # noqa: E402
+from flareDL import extract_all_flare_urls  # noqa: E402
+from telegram_logic.flare import process_flare  # noqa: E402
 from telegram_logic import alerts as _alerts  # noqa: E402
 from teraboxDL.terabox_dl import set_pool_exhausted_hook  # noqa: E402
 from firebase_db.users import track_user  # noqa: E402
@@ -139,6 +141,13 @@ async def handle_message(event):
         if u not in seen_urls:
             seen_urls.add(u)
             jobs.append((u, process_social))
+
+    # 5. Flare / CashSnap / HugeBox links
+    flare_url_list = extract_all_flare_urls(text)
+    for u in flare_url_list:
+        if u not in seen_urls:
+            seen_urls.add(u)
+            jobs.append((u, process_flare))
 
     if jobs:
         log.info("auto-detect batch", extra={"chat_id": event.chat_id, "job_count": len(jobs)})
