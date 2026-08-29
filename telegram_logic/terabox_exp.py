@@ -16,6 +16,7 @@ from firebase_db.users import record_history, get_today_count, bump_today
 from .progress_callbacks import make_download_progress_cb, make_upload_progress_cb
 from .structured_log import ctx_logger, bind_context, new_request_id
 from .compress import maybe_compress
+from .media_info import extract_video_metadata, generate_video_thumbnail, get_video_attributes
 
 from teraboxDL.errors import TeraBoxError, CancelledError, TeraBoxDirectError, TeraBoxMultipleChoice
 from teraboxDL.public_api import download_terabox_file_experimental
@@ -121,12 +122,16 @@ async def helper(event, terabox_url: str, is_hd: bool, quality: str = DEFAULT_QU
                 except Exception as e:
                     log.warning(f"Could not clean up {p}: {e}")
 
-    # Temp artifacts for this task: downloaded file, remux leftover, local M3U8
     m3u8_tmp = os.path.join(tempfile.gettempdir(), f"terabox_{cache_key}.m3u8")
+    thumb_path = None
 
     def _cleanup_all(filepath=None):
-        paths = [filepath, os.path.splitext(filepath)[0] + ".ts" if filepath else None,
-                 m3u8_tmp]
+        paths = [
+            filepath,
+            os.path.splitext(filepath)[0] + ".ts" if filepath else None,
+            m3u8_tmp,
+            thumb_path,
+        ]
         _cleanup_files(*paths)
 
     cancel_event = threading.Event()
@@ -167,7 +172,7 @@ async def helper(event, terabox_url: str, is_hd: bool, quality: str = DEFAULT_QU
                 await _safe_send(status.edit, "❌ Failed to send video.")
             return
 
-        # — Phase 2: Prepare metadata ————————————————————————————————————————————————————
+        # — Phase 2: Prepare metadata ——————————————————————————————————————————
         await _safe_send(status.edit, "⏳ Fetching metadata…", buttons=cancel_btn)
 
         #! GET FILE INFO
@@ -185,24 +190,44 @@ async def helper(event, terabox_url: str, is_hd: bool, quality: str = DEFAULT_QU
             else:
                 await _safe_send(status.edit, "❌ Share contains too many files to list. Ask the admin to split it.")
             return
-        except TeraBoxDirectError as e:
-            log.error(f"Metadata fetch failed for surl={surl}: {e}")
+        except TeraBoxRateLimited as e:
+            log.warning(f"TeraBox rate-limited (HTTP 429) for surl={surl}: {e}")
+            alerts.dispatch(
+                f"⚠️ TeraBox rate limit (429) hit for `surl={surl}`.\n"
+                "Rotating cookies automatically.",
+                key="tb-429",
+            )
             rate_limit.register_failure(chat_id)
             stats_fail()
-            await _safe_send(status.edit, f"❌ {e}\n\nYou can try different *mode* to download.\nSwitch *mode* from /settings")
+            await _safe_send(
+                status.edit,
+                "⏳ TeraBox is currently rate-limiting downloads. "
+                "The bot is rotating cookies — please try again in a few moments.",
+            )
+            return
+        except TeraBoxDirectError as e:
+            log.error(f"TeraBox direct error for surl={surl}: {e}")
+            rate_limit.register_failure(chat_id)
+            stats_fail()
+            await _safe_send(status.edit, f"❌ {e}")
+            return
+        except TeraBoxError as e:
+            log.error(f"TeraBox metadata error for surl={surl}: {e}")
+            rate_limit.register_failure(chat_id)
+            stats_fail()
+            await _safe_send(status.edit, f"❌ Failed to get video info: {e}")
             return
         except Exception as e:
-            log.error(f"Metadata fetch failed for surl={surl}: {e}")
+            log.exception(f"Unexpected metadata error for surl={surl}")
             rate_limit.register_failure(chat_id)
-            stats_fail()
-            await _safe_send(status.edit, f"❌ Failed to get video info: {e}\n\nYou can try different *mode* to download.\nSwitch *mode* from /settings")
+            await _safe_send(status.edit, f"❌ Failed to get video info: {e}")
             return
 
         download_url = info["download_url"]
         filename = info["filename"]
         size_str = format_size(info["size"])
 
-        # — File size limit ————————————————————————————————————————————————————————————————
+        # — File size limit ————————————————————————————————————————————————————————
         size_error = check_size_limit(info["size"])
         if size_error:
             log.info(f"Size limit hit for surl={surl}: {info['size']} bytes")
@@ -212,25 +237,9 @@ async def helper(event, terabox_url: str, is_hd: bool, quality: str = DEFAULT_QU
             )
             return
 
-        # Thumbnail preview (best-effort — never block the pipeline)
-        thumb_url = info.get("thumb_url") or ""
-        if thumb_url:
-            try:
-                await _cancellable(_safe_send(
-                    bot.send_file,
-                    chat_id, thumb_url,
-                    caption=f"🎬 **{filename}**\n📐 Size: **{size_str}**",
-                    reply_to=event.message.id,
-                ), cancel_event)
-            except Exception:
-                pass  # preview is cosmetic
-
-        # Single status update — a separate "Quality:" edit would be
-        # instantly overwritten and just burns an API call.
-        quality_line = f"\n🎯 Quality: **{quality.split('_')[-1]}**\n" if (quality != DEFAULT_QUALITY and not is_hd) else "\n"
         await _safe_send(
             status.edit,
-            f"📦 **{filename}**\n📐 Size: **{size_str}**{quality_line}\n⬇️ Downloading… **0%**",
+            f"📦 **{filename}**\n📐 Size: **{size_str}**\n\n⬇️ Downloading… **0%**",
             buttons=cancel_btn,
         )
 
@@ -242,15 +251,11 @@ async def helper(event, terabox_url: str, is_hd: bool, quality: str = DEFAULT_QU
             expected_total=int(info.get("size") or 0),
         )
         try:
-            filepath = await asyncio.to_thread(download_terabox_file_experimental, download_url, filename, cancel_event, dl_progress_cb)
+            filepath = await asyncio.to_thread(
+                download_terabox_file_experimental, download_url, filename, cancel_event, dl_progress_cb
+            )
         except CancelledError:
             await _safe_send(status.edit, "🚫 Cancelled.")
-            return
-        except TeraBoxError as e:
-            log.error(f"Download error for surl={surl}: {e}")
-            rate_limit.register_failure(chat_id)
-            stats_fail()
-            await _safe_send(status.edit, f"❌ Download failed: {e}\n\nYou can try different *mode* to download.\nSwitch *mode* from /settings")
             return
         except Exception as e:
             log.exception(f"Unexpected download error for surl={surl}")
@@ -265,7 +270,7 @@ async def helper(event, terabox_url: str, is_hd: bool, quality: str = DEFAULT_QU
             await _safe_send(status.edit, "🚫 Cancelled.")
             return
 
-        # — Phase 3b: optional H.264 compression ————————————————————————————
+        # — Optional compression (manual `comp` keyword or auto > threshold) ──
         auto_trigger = (
             not compress
             and AUTO_COMPRESS_THRESHOLD_MB > 0
@@ -284,6 +289,16 @@ async def helper(event, terabox_url: str, is_hd: bool, quality: str = DEFAULT_QU
 
         # Use actual file size (compressed TS/MP4) instead of original API size
         size_str = format_size(os.path.getsize(filepath))
+
+        # Extract video metadata & generate native thumbnail for in-player streaming
+        meta = await asyncio.to_thread(extract_video_metadata, filepath)
+        thumb_path = await asyncio.to_thread(generate_video_thumbnail, filepath)
+        video_attrs = get_video_attributes(
+            filepath,
+            duration=meta.get("duration"),
+            width=meta.get("width"),
+            height=meta.get("height"),
+        )
 
         # — Phase 4: Upload to storage group (cache) ———————————————————————————————————————
         if cancel_event.is_set():
@@ -306,7 +321,15 @@ async def helper(event, terabox_url: str, is_hd: bool, quality: str = DEFAULT_QU
                 # Upload file bytes to Telegram ONCE → get reusable InputFile handle
                 input_file = await _cancellable(_pre_upload_file(filepath, progress_cb), cancel_event)
                 try:
-                    storage_msg = await _cancellable(_upload_to_storage(input_file, filename), cancel_event)
+                    storage_msg = await _cancellable(
+                        _upload_to_storage(
+                            input_file,
+                            filename,
+                            thumb=thumb_path,
+                            attributes=video_attrs,
+                        ),
+                        cancel_event,
+                    )
                     if storage_msg is not None:
                         await asyncio.to_thread(add_to_cache, cache_key, storage_msg.id, user_mode)
                 except Exception as e:
@@ -369,6 +392,10 @@ async def helper(event, terabox_url: str, is_hd: bool, quality: str = DEFAULT_QU
                 kwargs = {}
                 if progress_cb:
                     kwargs["progress_callback"] = progress_cb
+                if thumb_path:
+                    kwargs["thumb"] = thumb_path
+                if video_attrs:
+                    kwargs["attributes"] = video_attrs
                 sent_video = await _cancellable(
                     _safe_send(
                         bot.send_file,

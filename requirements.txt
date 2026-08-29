@@ -21,3 +21,7 @@ google-cloud-firestore==2.28.1
 # Diskwala _x response decryption (AES-256-GCM)
 cryptography==50.0.0
 brotli==1.1.0
+
+# Social media downloader (YouTube, Instagram, TikTok, Twitter/X, Reddit, etc.)
+yt-dlp>=2025.1.15
+

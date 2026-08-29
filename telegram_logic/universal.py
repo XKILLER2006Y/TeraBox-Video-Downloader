@@ -28,6 +28,7 @@ from firebase_db.users import record_history, bump_today, get_today_count
 from firebase_db.cache import add_to_cache, search_in_cache
 from universalDL import resolve_universal, UniversalDL
 from network import get_session
+from .media_info import extract_video_metadata, generate_video_thumbnail, get_video_attributes
 
 logger = logging.getLogger(__name__)
 
@@ -198,12 +199,33 @@ async def process_universal(event, url: str, bot) -> None:
             f"📦 {filename}\n📐 Size: {actual_size / (1024*1024):.1f} MB\n\n⬆️ Uploading..."
         )
 
-        # ── Phase 4: Upload to storage group (cache for future) ─────────────────———————
+        # ── Extract video metadata & thumbnail if video ────────────────────────
+        meta = await asyncio.to_thread(extract_video_metadata, filepath)
+        thumb_path = await asyncio.to_thread(generate_video_thumbnail, filepath)
+        is_video = meta.get("duration", 0) > 0 or meta.get("width", 0) > 0
+        video_attrs = get_video_attributes(
+            filepath,
+            duration=meta.get("duration"),
+            width=meta.get("width"),
+            height=meta.get("height"),
+        ) if is_video else None
+
+        # ── Phase 4: Upload to storage group (cache for future) ─────────────────
         storage_msg = None
         if STORAGE_GROUP_ID:
             try:
+                storage_kwargs = {"caption": filename}
+                if is_video:
+                    storage_kwargs["supports_streaming"] = True
+                    if thumb_path:
+                        storage_kwargs["thumb"] = thumb_path
+                    if video_attrs:
+                        storage_kwargs["attributes"] = video_attrs
+                else:
+                    storage_kwargs["force_document"] = True
+
                 storage_msg = await asyncio.wait_for(
-                    bot.send_file(STORAGE_GROUP_ID, filepath, caption=filename, force_document=True),
+                    bot.send_file(STORAGE_GROUP_ID, filepath, **storage_kwargs),
                     timeout=300,
                 )
                 logger.info(f"Stored in warehouse: msg_id={storage_msg.id}")
@@ -212,15 +234,35 @@ async def process_universal(event, url: str, bot) -> None:
                 logger.warning(f"Storage upload failed (non-fatal): {e}")
                 storage_msg = None
 
-        # ── Phase 5: Deliver to user ─────────────────────────────────────────────────—————
+        # ── Phase 5: Deliver to user ───────────────────────────────────────────
         if storage_msg:
-            await bot.send_file(chat_id, storage_msg.media, caption=f"✅ {filename}")
+            await bot.send_file(
+                chat_id,
+                storage_msg.media,
+                caption=f"✅ {filename}",
+                supports_streaming=is_video,
+            )
         else:
+            deliver_kwargs = {"caption": f"✅ {filename}"}
+            if is_video:
+                deliver_kwargs["supports_streaming"] = True
+                if thumb_path:
+                    deliver_kwargs["thumb"] = thumb_path
+                if video_attrs:
+                    deliver_kwargs["attributes"] = video_attrs
+            else:
+                deliver_kwargs["force_document"] = True
+
             await asyncio.wait_for(
-                bot.send_file(chat_id, filepath,
-                              caption=f"✅ {filename}", force_document=True),
+                bot.send_file(chat_id, filepath, **deliver_kwargs),
                 timeout=300,
             )
+
+        if thumb_path and os.path.exists(thumb_path):
+            try:
+                os.remove(thumb_path)
+            except OSError:
+                pass
 
         await _safe_send(status_msg.edit, f"✅ {filename} — delivered!")
         rate_limit.register_success(chat_id)

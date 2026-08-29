@@ -39,6 +39,7 @@ from telegram_logic.helpers import extract_all_terabox_url_exp, env_int, cap_lin
 from diskwalaDL.public_api import extract_all_diskwala_urls  # noqa: E402
 from universalDL import extract_universal_urls  # noqa: E402
 from telegram_logic.universal import process_universal  # noqa: E402
+from telegram_logic.social_dl import extract_all_social_urls, process_social  # noqa: E402
 from telegram_logic import alerts as _alerts  # noqa: E402
 from teraboxDL.terabox_dl import set_pool_exhausted_hook  # noqa: E402
 from firebase_db.users import track_user  # noqa: E402
@@ -131,6 +132,13 @@ async def handle_message(event):
         if u not in seen_urls:
             seen_urls.add(u)
             jobs.append((u, lambda ev, url: process_universal(ev, url, bot)))
+
+    # 4. Social media platforms (YouTube, Instagram, TikTok, Twitter/X, Reddit, etc.)
+    social_url_list = extract_all_social_urls(text)
+    for u in social_url_list:
+        if u not in seen_urls:
+            seen_urls.add(u)
+            jobs.append((u, process_social))
 
     if jobs:
         log.info("auto-detect batch", extra={"chat_id": event.chat_id, "job_count": len(jobs)})

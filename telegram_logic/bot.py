@@ -157,7 +157,7 @@ async def _pre_upload_file(filepath: str, progress_cb=None):
         progress_callback=progress_cb,
     )
 
-async def _upload_to_storage(file, filename: str, progress_cb=None):
+async def _upload_to_storage(file, filename: str, progress_cb=None, thumb=None, attributes=None):
     """
     Upload a file to the storage group.
     `file` can be a filepath (str) or a pre-uploaded InputFile handle.
@@ -169,6 +169,10 @@ async def _upload_to_storage(file, filename: str, progress_cb=None):
     kwargs = {}
     if isinstance(file, str) and progress_cb:
         kwargs["progress_callback"] = progress_cb
+    if thumb:
+        kwargs["thumb"] = thumb
+    if attributes:
+        kwargs["attributes"] = attributes
 
     return await _safe_send(
         bot.send_file,

@@ -18,6 +18,7 @@ from firebase_db.stats import record_success as stats_ok, record_failure as stat
 from firebase_db.users import record_history, get_today_count, bump_today
 from .progress_callbacks import make_download_progress_cb, make_upload_progress_cb
 from .structured_log import ctx_logger, bind_context, new_request_id
+from .media_info import extract_video_metadata, generate_video_thumbnail, get_video_attributes
 
 from teraboxDL.errors import DownloadError, CancelledError
 from teraboxDL.public_api import download_terabox_file_experimental
@@ -240,9 +241,19 @@ async def _dw_helper(event, diskwala_url: str) -> None:
         # Use actual file size on disk instead of the API-reported size
         size_str = format_size(os.path.getsize(filepath))
 
+        # Extract video metadata & generate native thumbnail for in-player streaming
+        meta = await asyncio.to_thread(extract_video_metadata, filepath)
+        thumb_path = await asyncio.to_thread(generate_video_thumbnail, filepath)
+        video_attrs = get_video_attributes(
+            filepath,
+            duration=meta.get("duration"),
+            width=meta.get("width"),
+            height=meta.get("height"),
+        )
+
         # — Phase 4: Upload to storage group (cache) ———————————————————————————————————————
         if cancel_event.is_set():
-            _cleanup_files(filepath, os.path.splitext(filepath)[0] + ".ts")
+            _cleanup_files(filepath, os.path.splitext(filepath)[0] + ".ts", thumb_path)
             await _safe_send(status.edit, "🚫 Cancelled.")
             return
 
@@ -261,7 +272,15 @@ async def _dw_helper(event, diskwala_url: str) -> None:
                 # Upload file bytes to Telegram ONCE → get reusable InputFile handle
                 input_file = await _cancellable(_pre_upload_file(filepath, progress_cb), cancel_event)
                 try:
-                    storage_msg = await _cancellable(_upload_to_storage(input_file, filename), cancel_event)
+                    storage_msg = await _cancellable(
+                        _upload_to_storage(
+                            input_file,
+                            filename,
+                            thumb=thumb_path,
+                            attributes=video_attrs,
+                        ),
+                        cancel_event,
+                    )
                     if storage_msg is not None:
                         await asyncio.to_thread(add_to_cache, link_id, storage_msg.id, user_mode)
                 except Exception as e:
@@ -269,7 +288,7 @@ async def _dw_helper(event, diskwala_url: str) -> None:
                     log.error(f"Storage send failed (pre-upload kept) for {link_id}: {e}")
             except asyncio.CancelledError:
                 log.info(f"Upload cancelled by user for {link_id}")
-                _cleanup_files(filepath, os.path.splitext(filepath)[0] + ".ts")
+                _cleanup_files(filepath, os.path.splitext(filepath)[0] + ".ts", thumb_path)
                 await _safe_send(status.edit, "🚫 Cancelled.")
                 return
             except Exception as e:
@@ -324,6 +343,10 @@ async def _dw_helper(event, diskwala_url: str) -> None:
                 kwargs = {}
                 if progress_cb:
                     kwargs["progress_callback"] = progress_cb
+                if thumb_path:
+                    kwargs["thumb"] = thumb_path
+                if video_attrs:
+                    kwargs["attributes"] = video_attrs
                 sent_video = await _cancellable(
                     _safe_send(
                         bot.send_file,
@@ -344,19 +367,19 @@ async def _dw_helper(event, diskwala_url: str) -> None:
                     pass
             except asyncio.CancelledError:
                 log.info(f"Direct upload cancelled by user for {link_id}")
-                _cleanup_files(filepath, os.path.splitext(filepath)[0] + ".ts")
+                _cleanup_files(filepath, os.path.splitext(filepath)[0] + ".ts", thumb_path)
                 await _safe_send(status.edit, "🚫 Cancelled.")
                 return
             except Exception as e:
                 log.error(f"Direct upload failed for {link_id}: {e}")
-                _cleanup_files(filepath, os.path.splitext(filepath)[0] + ".ts")
+                _cleanup_files(filepath, os.path.splitext(filepath)[0] + ".ts", thumb_path)
                 await _safe_send(status.edit, f"❌ Upload failed: {e}")
                 return
 
         file_size = os.path.getsize(filepath) if filepath and os.path.exists(filepath) else 0
 
-        for f_path in (filepath, os.path.splitext(filepath)[0] + ".ts"):
-            if os.path.exists(f_path):
+        for f_path in (filepath, os.path.splitext(filepath)[0] + ".ts", thumb_path):
+            if f_path and os.path.exists(f_path):
                 try:
                     os.remove(f_path)
                     log.info(f"Deleted local file: {f_path}")
