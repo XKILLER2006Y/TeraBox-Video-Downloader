@@ -119,14 +119,15 @@ def get_flare_info(url: str) -> Dict[str, Any]:
         raise FlareDirectError(reasons.get(msg, f"Flare link unavailable ({msg})"))
 
     files = data.get("files") or []
-    if not files:
-        raise FlareDirectError("No downloadable files found in this Flare link.")
+    user_info = data.get("user") or {}
+    uid = user_info.get("id", "")
+
+    if not files or not uid:
+        raise FlareDirectError("This Flare link has expired or the file was deleted by the uploader.")
 
     file_entry = files[0]
     file_id = file_entry.get("file_id") or file_entry.get("id")
     file_meta = file_entry.get("file_meta") or {}
-    user_info = data.get("user") or {}
-    uid = user_info.get("id", "")
 
     filename = file_meta.get("display_name") or f"flare_{share_id}.mp4"
     if not filename.lower().endswith((".mp4", ".mkv", ".webm")):
@@ -136,8 +137,8 @@ def get_flare_info(url: str) -> Dict[str, Any]:
     thumb_url = file_meta.get("thumbnail") or ""
 
     # 2. Fetch encrypted download URL
-    if not uid or not file_id:
-        raise FlareError("Missing user ID or file ID from Flare metadata.")
+    if not file_id:
+        raise FlareDirectError("File ID missing from Flare metadata.")
 
     dl_payload = {
         "uid": str(uid),
@@ -151,8 +152,12 @@ def get_flare_info(url: str) -> Dict[str, Any]:
             headers=_HEADERS,
             timeout=15,
         )
+        if dl_resp.status_code == 400:
+            raise FlareDirectError("This Flare download link is no longer valid or has expired.")
         dl_resp.raise_for_status()
         encrypted_token = dl_resp.text.strip().strip('"')
+    except FlareDirectError:
+        raise
     except Exception as e:
         log.error(f"Failed to fetch Flare download token: {e}")
         raise FlareError(f"Failed to fetch Flare download URL: {e}") from e
