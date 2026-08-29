@@ -46,38 +46,35 @@ async def handle_dl(event):
     arg, quality = parse_quality(arg)
 
     # ── Detect platform and route ────────────────────────────────────────────
-    terabox_urls = extract_all_terabox_url_exp(arg)
-    diskwala_urls = extract_all_diskwala_urls(arg) if not terabox_urls else []
-
-    if terabox_urls:
-        # TeraBox → exp pipeline
-        from ..terabox_exp import process_terabox_experimental
-        urls, dropped = cap_links(terabox_urls)
-        if dropped > 0:
-            await event.respond(
-                f"⚠️ Too many links — processing the first {len(urls)}. "
-                f"Send the rest in a follow-up message."
-            )
-        logger.info(f"/dl [terabox] {len(urls)} url(s), quality={quality}, comp={compress}")
-        for url in urls:
-            await process_terabox_experimental(event, url, quality=quality, compress=compress)
-        return
-
-    if diskwala_urls:
-        # Diskwala → dw pipeline
-        from ..diskwala import process_diskwala
-        urls, dropped = cap_links(diskwala_urls)
-        if dropped > 0:
-            await event.respond(
-                f"⚠️ Too many links — processing the first {len(urls)}. "
-                f"Send the rest in a follow-up message."
-            )
-        logger.info(f"/dl [diskwala] {len(urls)} url(s)")
-        for url in urls:
-            await process_diskwala(event, url)
-        return
-
-    # Universal platforms (filesadda, GoFile, StreamTape, Dood, …)
+    from ..terabox_exp import process_terabox_experimental
+    from ..diskwala import process_diskwala
     from telegram_logic.universal import process_universal
+
+    jobs = []
+    seen_urls = set()
+
+    for u in extract_all_terabox_url_exp(arg):
+        if u not in seen_urls:
+            seen_urls.add(u)
+            jobs.append((u, lambda ev, url: process_terabox_experimental(ev, url, quality=quality, compress=compress)))
+
+    for u in extract_all_diskwala_urls(arg):
+        if u not in seen_urls:
+            seen_urls.add(u)
+            jobs.append((u, process_diskwala))
+
+    # If specific platform URLs were found in arguments
+    if jobs:
+        jobs, dropped = cap_links(jobs)
+        if dropped > 0:
+            await event.respond(
+                f"⚠️ Too many links — processing the first {len(jobs)}. "
+                f"Send the rest in a follow-up message."
+            )
+        for url, proc in jobs:
+            await proc(event, url)
+        return
+
+    # Fall back to Universal platforms (filesadda, GoFile, StreamTape, Dood, etc.)
     logger.info(f"/dl [universal] {arg[:60]}")
     await process_universal(event, arg, bot)

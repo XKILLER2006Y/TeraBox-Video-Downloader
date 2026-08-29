@@ -67,10 +67,14 @@ async def upload_file_fast(
     the entire file into memory. Only MAX_PARALLEL chunks are in memory at once.
     """
     file_size = os.path.getsize(file_path)
+    if file_size == 0:
+        file_total_parts = 1
+    else:
+        file_total_parts = math.ceil(file_size / CHUNK_SIZE)
+
     # 63-bit random file id (telethon.utils.generate_random_long was
     # removed in newer Telethon versions)
     file_id = int.from_bytes(os.urandom(8), "big") & 0x7FFFFFFFFFFFFFFF
-    file_total_parts = math.ceil(file_size / CHUNK_SIZE)
     
     log.info(f"Fast upload: {os.path.basename(file_path)} ({file_size / (1024*1024):.1f} MB, {file_total_parts} parts)")
     
@@ -89,8 +93,15 @@ async def upload_file_fast(
     
     # Open file once, read chunks on demand — max MAX_PARALLEL chunks in RAM
     with open(file_path, 'rb') as _file_handle:
-        tasks = [_send_with_sem(i) for i in range(file_total_parts)]
-        await asyncio.gather(*tasks)
+        tasks = [asyncio.create_task(_send_with_sem(i)) for i in range(file_total_parts)]
+        try:
+            await asyncio.gather(*tasks)
+        except (asyncio.CancelledError, Exception):
+            for t in tasks:
+                if not t.done():
+                    t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
     
     log.info(f"Fast upload complete: {os.path.basename(file_path)}")
     

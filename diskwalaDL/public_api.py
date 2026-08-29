@@ -30,37 +30,25 @@ import logging
 import requests
 
 from diskwalaDL.errors import DiskwalaError  # canonical definition (re-exported)
+from diskwalaDL.diskwala_dl import (
+    DISKWALA_URL_RE,
+    extract_diskwala_id,
+    extract_all_diskwala_urls,
+    invalidate_token_cache,
+)
 
 log = logging.getLogger(__name__)
 
 DISKWALA_PROXY_URL = os.getenv("DISKWALA_PROXY_URL")
 DISKWALA_API_KEY = os.getenv("DISKWALA_API_KEY")
 
-# Diskwala share links embed a 24-char hex id (a MongoDB ObjectId).
-_LINK_ID_RE = re.compile(r"[a-fA-F0-9]{24}")
-
-# A full Diskwala URL sitting anywhere inside a block of text.
-DISKWALA_URL_RE = re.compile(r"https?://\S*diskwala\.com/\S+", re.IGNORECASE)
-
-__all__ = ["DiskwalaError", "extract_diskwala_id", "extract_all_diskwala_urls", "get_diskwala_info"]
-
-
-def extract_diskwala_id(text: str) -> str | None:
-    """Return the 24-hex Diskwala link id found in `text`, or None."""
-    m = _LINK_ID_RE.search(text or "")
-    return m.group(0) if m else None
-
-
-def extract_all_diskwala_urls(text: str) -> list[str]:
-    """Extract all unique Diskwala URLs (that carry a link id) from `text`."""
-    seen: set[str] = set()
-    urls: list[str] = []
-    for m in DISKWALA_URL_RE.finditer(text or ""):
-        url = m.group(0).rstrip(").,]}\"'")  # trim trailing punctuation
-        if url not in seen and extract_diskwala_id(url):
-            seen.add(url)
-            urls.append(url)
-    return urls
+__all__ = [
+    "DiskwalaError",
+    "extract_diskwala_id",
+    "extract_all_diskwala_urls",
+    "get_diskwala_info",
+    "invalidate_token_cache",
+]
 
 
 def _extract_error_detail(resp: "requests.Response") -> str:

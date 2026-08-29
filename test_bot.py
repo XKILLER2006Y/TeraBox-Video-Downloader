@@ -11,12 +11,12 @@ from dotenv import load_dotenv
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 CHAT_ID = os.getenv("ADMIN_ID") or os.getenv("TEST_CHAT_ID", "")
-if not BOT_TOKEN or not CHAT_ID:
-    sys.exit("Set BOT_TOKEN and ADMIN_ID (or TEST_CHAT_ID) in .env first.")
-BASE = f"https://api.telegram.org/bot{BOT_TOKEN}"
+BASE = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
 
 def send_command(text):
     """Send a message to the bot."""
+    if not BOT_TOKEN or not CHAT_ID:
+        raise RuntimeError("Set BOT_TOKEN and ADMIN_ID (or TEST_CHAT_ID) in .env first.")
     r = requests.post(f"{BASE}/sendMessage", json={
         "chat_id": CHAT_ID,
         "text": text,
@@ -27,6 +27,8 @@ def send_command(text):
 
 def get_updates(offset=None, timeout=5):
     """Poll for new messages."""
+    if not BOT_TOKEN:
+        return {"ok": False, "error": "No BOT_TOKEN"}
     params = {"timeout": timeout}
     if offset:
         params["offset"] = offset
@@ -60,55 +62,63 @@ def collect_responses(duration=30):
     return responses
 
 
-print("=" * 60)
-print("TEST 1: /start command")
-print("=" * 60)
-send_command("/start")
-time.sleep(2)
-responses = collect_responses(duration=10)
-if responses:
-    print(f"  ✓ Got {len(responses)} response(s)")
-else:
-    print("  ✗ No response")
+def main():
+    if not BOT_TOKEN or not CHAT_ID:
+        sys.exit("Set BOT_TOKEN and ADMIN_ID (or TEST_CHAT_ID) in .env first.")
 
-print()
-print("=" * 60)
-print("TEST 2: /settings command")
-print("=" * 60)
-send_command("/settings")
-time.sleep(2)
-responses = collect_responses(duration=10)
-if responses:
-    print(f"  ✓ Got {len(responses)} response(s)")
-else:
-    print("  ✗ No response")
+    print("=" * 60)
+    print("TEST 1: /start command")
+    print("=" * 60)
+    send_command("/start")
+    time.sleep(2)
+    responses = collect_responses(duration=10)
+    if responses:
+        print(f"  ✓ Got {len(responses)} response(s)")
+    else:
+        print("  ✗ No response")
 
-print()
-print("=" * 60)
-print("TEST 3: /exp with a test TeraBox URL")
-print("=" * 60)
-# Use a known public TeraBox share link for testing
-TEST_URL = "https://terabox.com/s/1Y3bMGa9rA8i7GRvnZ-Vm5UqjQtiQ-2Cx"
-send_command(f"/exp {TEST_URL}")
-time.sleep(3)
-print("  Collecting responses (up to 120s - chunk discovery takes time)...")
-responses = collect_responses(duration=120)
-if responses:
-    print(f"  ✓ Got {len(responses)} response(s)")
-else:
-    print("  ✗ No response")
+    print()
+    print("=" * 60)
+    print("TEST 2: /settings command")
+    print("=" * 60)
+    send_command("/settings")
+    time.sleep(2)
+    responses = collect_responses(duration=10)
+    if responses:
+        print(f"  ✓ Got {len(responses)} response(s)")
+    else:
+        print("  ✗ No response")
 
-print()
-print("=" * 60)
-print("TEST 4: /exp without URL (should show usage)")
-print("=" * 60)
-send_command("/exp")
-time.sleep(2)
-responses = collect_responses(duration=10)
-if responses:
-    print(f"  ✓ Got {len(responses)} response(s)")
-else:
-    print("  ✗ No response")
+    print()
+    print("=" * 60)
+    print("TEST 3: /exp with a test TeraBox URL")
+    print("=" * 60)
+    # Use a known public TeraBox share link for testing
+    TEST_URL = "https://terabox.com/s/1Y3bMGa9rA8i7GRvnZ-Vm5UqjQtiQ-2Cx"
+    send_command(f"/exp {TEST_URL}")
+    time.sleep(3)
+    print("  Collecting responses (up to 120s - chunk discovery takes time)...")
+    responses = collect_responses(duration=120)
+    if responses:
+        print(f"  ✓ Got {len(responses)} response(s)")
+    else:
+        print("  ✗ No response")
 
-print()
-print("All tests complete.")
+    print()
+    print("=" * 60)
+    print("TEST 4: /exp without URL (should show usage)")
+    print("=" * 60)
+    send_command("/exp")
+    time.sleep(2)
+    responses = collect_responses(duration=10)
+    if responses:
+        print(f"  ✓ Got {len(responses)} response(s)")
+    else:
+        print("  ✗ No response")
+
+    print()
+    print("All tests complete.")
+
+
+if __name__ == "__main__":
+    main()

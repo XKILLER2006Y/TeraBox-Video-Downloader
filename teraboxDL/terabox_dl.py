@@ -76,7 +76,7 @@ def _extract_surl(terabox_url: str) -> str:
     m = re.search(r'[?&]surl=1?([A-Za-z0-9_-]+)', terabox_url)
     if m:
         return m.group(1)
-    raise Exception(f"Could not extract surl from URL: {terabox_url}")
+    raise TeraBoxDirectError(f"Could not extract share ID from URL: {terabox_url}")
 
 
 def _load_session(cookies_str: str = ""):

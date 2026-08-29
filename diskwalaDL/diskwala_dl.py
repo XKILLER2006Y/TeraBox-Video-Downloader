@@ -22,9 +22,10 @@ import time
 import threading
 import logging
 import asyncio
-from urllib.parse import urlparse, unquote
+from urllib.parse import urlparse, unquote, parse_qs
 
-import requests
+from network import get_session
+from diskwalaDL.errors import DiskwalaDirectError  # noqa: E402 — re-exported for compat
 
 log = logging.getLogger(__name__)
 
@@ -49,18 +50,19 @@ _DISKWALA_AES_KEY_HEX = os.environ.get(
     "e7109544dab612bd5b80b8a427ac474ba5541b9efff7a4ca1c8ef85df2489c23",
 )
 
-# Regex for Diskwala share URLs
+# Regex for Diskwala share URLs (supports diskwala.com, miniapp.diskwala.net, and Telegram mini app t.me links)
 DISKWALA_URL_RE = re.compile(
-    r"https?://(?:www\.)?diskwala\.com/(?:app|sharing/link)\b\S*", re.IGNORECASE
+    r"https?://(?:(?:www\.)?diskwala\.com/(?:app|sharing/link|share|d)\b\S*|"
+    r"miniapp\.diskwala\.net/\S*|"
+    r"t\.me/(?:sky577bot|diskwalabot)(?:/[a-zA-Z0-9_-]+)?\?(?:startapp|start)=\S*)",
+    re.IGNORECASE,
 )
 _LINK_ID_RE = re.compile(r"[a-fA-F0-9]{24}")
 
 
 # ── Exceptions ─────────────────────────────────────────────────────────────────────────
 
-from diskwalaDL.errors import DiskwalaDirectError  # noqa: E402 — re-exported for compat
-
-__all__ = ["DiskwalaDirectError", "get_diskwala_info_direct"]
+__all__ = ["DiskwalaDirectError", "get_diskwala_info_direct", "invalidate_token_cache"]
 
 
 # ── AES-GCM decryption ─────────────────────────────────────────────────────────────———
@@ -94,7 +96,22 @@ def _decrypt_diskwala_response(encrypted_obj: dict) -> dict:
 
 def extract_diskwala_id(text: str) -> str | None:
     m = _LINK_ID_RE.search(text or "")
-    return m.group(0) if m else None
+    if m:
+        return m.group(0)
+    if text and ("?" in text or "&" in text):
+        try:
+            parsed = urlparse(text)
+            qs = parse_qs(parsed.query)
+            for k in ("id", "startapp", "start", "link"):
+                if k in qs and qs[k]:
+                    val = qs[k][0]
+                    m_val = _LINK_ID_RE.search(val)
+                    if m_val:
+                        return m_val.group(0)
+                    return val
+        except Exception:
+            pass
+    return None
 
 
 def extract_all_diskwala_urls(text: str) -> list[str]:
@@ -166,12 +183,17 @@ async def _get_auth_token() -> str:
 
     # The Mini App sends the raw initData string as Bearer token.
     # The URL fragment contains: tgWebAppData=<URL-encoded initData>&tgWebAppVersion=...
-    # We need to extract and decode just the initData portion.
+    # We extract and decode the initData portion cleanly via parse_qs or robust fallback.
     url = result.url
-    fragment = urlparse(url).fragment
-    tg_web_app_data = unquote(
-        fragment.split("tgWebAppData=", 1)[1].split("&tgWebAppVersion=", 1)[0]
-    )
+    parsed = urlparse(url)
+    fragment = parsed.fragment
+    qs = parse_qs(fragment)
+    if "tgWebAppData" in qs and qs["tgWebAppData"]:
+        tg_web_app_data = qs["tgWebAppData"][0]
+    elif "tgWebAppData=" in fragment:
+        tg_web_app_data = unquote(fragment.split("tgWebAppData=", 1)[1].split("&")[0])
+    else:
+        tg_web_app_data = ""
 
     if not tg_web_app_data:
         raise DiskwalaDirectError("Empty initData in Mini App response")
@@ -194,14 +216,25 @@ def _make_headers(auth_token: str) -> dict:
     }
 
 
+def invalidate_token_cache() -> None:
+    """Clear the cached Mini App auth token so the next call fetches a fresh one."""
+    with _token_cache_lock:
+        _token_cache["token"] = ""
+        _token_cache["fetched_at"] = 0.0
+
+
 def _start_download(diskwala_url: str, headers: dict) -> dict:
     """POST to the download endpoint to start a resolution job."""
-    resp = requests.post(
+    session = get_session()
+    resp = session.post(
         DISKWALA_DOWNLOAD_API,
         headers=headers,
         json={"link": diskwala_url},
         timeout=60,
     )
+    if resp.status_code in (401, 403):
+        invalidate_token_cache()
+        raise DiskwalaDirectError(f"Diskwala auth expired or invalid (HTTP {resp.status_code}).")
     data = resp.json()
     # Decrypt _x responses
     if isinstance(data, dict) and data.get("_x"):
@@ -217,12 +250,16 @@ def _poll_status(diskwala_url: str, headers: dict, timeout: int = 120) -> dict:
     """Poll the status endpoint until status='done' or timeout. Adaptive interval."""
     from urllib.parse import quote
 
+    session = get_session()
     status_url = DISKWALA_STATUS_API + quote(diskwala_url, safe="")
     deadline = time.monotonic() + timeout
     poll_interval = 0.5  # start fast
 
     while time.monotonic() < deadline:
-        resp = requests.get(status_url, headers=headers, timeout=60)
+        resp = session.get(status_url, headers=headers, timeout=60)
+        if resp.status_code in (401, 403):
+            invalidate_token_cache()
+            raise DiskwalaDirectError(f"Diskwala auth expired while polling (HTTP {resp.status_code}).")
         data = resp.json()
 
         if not data.get("ok"):

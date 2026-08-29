@@ -29,7 +29,8 @@ _TERABOX_EXP_DOMAINS = (
     "terabox.com", "1024terabox.com", "teraboxapp.com", "freeterabox.com",
     "terabox.app", "terabox.fun", "4funbox.co", "4funbox.com",
     "mirrobox.com", "nephobox.com", "1024tera.com", "momerybox.com",
-    "tibibox.com", "terasharefile.com",
+    "tibibox.com", "terasharefile.com", "teraboxshare.com", "teraboxlink.com",
+    "terabox.club", "teraboxdrive.com",
 )
 # Longest-first so e.g. "4funbox.com" is preferred over the "4funbox.co" prefix.
 _TERABOX_EXP_DOMAIN_ALT = "|".join(

@@ -77,19 +77,22 @@ API_HASH = os.environ.get("API_HASH", "")
 STORAGE_GROUP_ID = env_int("STORAGE_GROUP_ID")
 
 
-async def _run_batch(event, urls: list[str], processor) -> None:
+async def _run_batch(event, jobs: list[tuple[str, any]]) -> None:
     """
-    Process a batch of links sequentially (gentle on Telegram and upstream),
-    with a per-message cap to prevent abuse.
+    Process a batch of download jobs (url, processor) sequentially
+    (gentle on Telegram and upstream), with a per-message cap to prevent abuse.
     """
-    urls, dropped = cap_links(urls)
+    jobs, dropped = cap_links(jobs)
     if dropped > 0:
         await event.respond(
-            f"⚠️ Too many links — processing the first {len(urls)}. "
+            f"⚠️ Too many links — processing the first {len(jobs)}. "
             f"Send the rest in a follow-up message."
         )
-    for url in urls:
-        await processor(event, url)
+    for url, processor in jobs:
+        try:
+            await processor(event, url)
+        except Exception:
+            log.error("unhandled error in job batch processor", extra={"chat_id": event.chat_id, "url": url}, exc_info=True)
 
 
 # — Basic Message Handler ————————————————————————————————————————————————————————————————————————————
@@ -104,32 +107,35 @@ async def handle_message(event):
     if text.startswith("/"):
         return  # Let command handlers deal with commands
 
-    # ── Auto-detect platform and route (no mode check needed) ────────────────
+    # ── Auto-detect platform and route (mixed-platform batches supported) ───
+    jobs: list[tuple[str, any]] = []
+    seen_urls: set[str] = set()
+
+    # 1. TeraBox links
     terabox_url_list = extract_all_terabox_url_exp(text)
-    if terabox_url_list:
-        try:
-            log.info("auto-detect [terabox]", extra={"chat_id": event.chat_id, "url_count": len(terabox_url_list)})
-            await _run_batch(event, terabox_url_list, process_terabox_experimental)
-        except Exception:
-            log.error("unhandled error in handle_message", extra={"chat_id": event.chat_id}, exc_info=True)
-        return
+    for u in terabox_url_list:
+        if u not in seen_urls:
+            seen_urls.add(u)
+            jobs.append((u, process_terabox_experimental))
 
+    # 2. Diskwala links
     diskwala_url_list = extract_all_diskwala_urls(text)
-    if diskwala_url_list:
-        try:
-            log.info("auto-detect [diskwala]", extra={"chat_id": event.chat_id, "url_count": len(diskwala_url_list)})
-            await _run_batch(event, diskwala_url_list, process_diskwala)
-        except Exception:
-            log.error("unhandled error in handle_message", extra={"chat_id": event.chat_id}, exc_info=True)
-        return
+    for u in diskwala_url_list:
+        if u not in seen_urls:
+            seen_urls.add(u)
+            jobs.append((u, process_diskwala))
 
+    # 3. Universal platforms (GoFile, MediaFire, Catbox, etc.)
     universal_url_list = extract_universal_urls(text)
-    if universal_url_list:
-        try:
-            log.info("auto-detect [universal]", extra={"chat_id": event.chat_id, "url_count": len(universal_url_list)})
-            await _run_batch(event, universal_url_list, lambda ev, url: process_universal(ev, url, bot))
-        except Exception:
-            log.error("unhandled error in universal DL", extra={"chat_id": event.chat_id}, exc_info=True)
+    for u in universal_url_list:
+        if u not in seen_urls:
+            seen_urls.add(u)
+            jobs.append((u, lambda ev, url: process_universal(ev, url, bot)))
+
+    if jobs:
+        log.info("auto-detect batch", extra={"chat_id": event.chat_id, "job_count": len(jobs)})
+        await _run_batch(event, jobs)
+        return
 
     return
 # — Telegram bot runner ———————————————————————————————————————————————————————————————————————
