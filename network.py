@@ -145,6 +145,11 @@ def prewarm_connections():
     hosts = [
         "dm.1024tera.com",
         "www.1024tera.com",
+        "flareobhx.com",
+        "flarepqyd.com",
+        "flaredvns.com",
+        "flaremlmq.com",
+        "flezen.com",
     ]
     session = get_session()
     for host in hosts:
