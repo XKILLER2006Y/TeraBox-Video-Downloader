@@ -22,7 +22,10 @@ import logging
 import time
 from typing import Literal
 
-from google.cloud.firestore_v1 import DELETE_FIELD  # noqa: F401 — available if needed
+try:
+    from google.cloud.firestore_v1 import DELETE_FIELD  # noqa: F401
+except ImportError:
+    DELETE_FIELD = None
 
 from .db import get_db
 

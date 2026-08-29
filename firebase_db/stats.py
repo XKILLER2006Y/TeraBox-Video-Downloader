@@ -18,7 +18,10 @@ stats backend must not break downloads.
 import logging
 from datetime import datetime, timezone
 
-from google.cloud.firestore_v1 import Increment
+try:
+    from google.cloud.firestore_v1 import Increment
+except ImportError:
+    Increment = None
 
 from .db import get_db
 

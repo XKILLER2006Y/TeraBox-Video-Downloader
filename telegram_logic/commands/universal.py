@@ -49,6 +49,7 @@ async def handle_dl(event):
     from ..terabox_exp import process_terabox_experimental
     from ..diskwala import process_diskwala
     from telegram_logic.universal import process_universal
+    from telegram_logic.social_dl import extract_all_social_urls, process_social
     from flareDL import extract_all_flare_urls
     from telegram_logic.flare import process_flare
     from flezenDL import extract_all_flezen_urls

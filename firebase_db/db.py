@@ -1,13 +1,18 @@
+from __future__ import annotations
 import os
 import re
 import json
 import base64
 import logging
-import firebase_admin
-from firebase_admin import credentials, firestore
-from dotenv import load_dotenv
+try:
+    import firebase_admin
+    from firebase_admin import credentials, firestore
+except ImportError:
+    firebase_admin = None
+    credentials = None
+    firestore = None
 
-load_dotenv()
+from dotenv import load_dotenv
 
 log = logging.getLogger(__name__)
 
