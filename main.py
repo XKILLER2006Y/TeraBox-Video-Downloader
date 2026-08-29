@@ -7,6 +7,7 @@ import asyncio  # noqa: E402
 import glob  # noqa: E402
 import time  # noqa: E402
 import resource  # noqa: E402
+import shutil  # noqa: E402
 from concurrent.futures import ThreadPoolExecutor  # noqa: E402
 from contextlib import asynccontextmanager  # noqa: E402
 
@@ -257,23 +258,36 @@ async def run_bot() -> None:
 # — Storage cleanup for Railway (ephemeral storage) ——————————————————————————————————————
 
 async def _storage_cleanup_loop():
-    """Periodically clean old files from storage to prevent disk exhaustion."""
-    storage_dir = os.path.join(os.path.dirname(__file__), "storage")
-    if not os.path.exists(storage_dir):
-        os.makedirs(storage_dir, exist_ok=True)
+    """Periodically clean old files from storage and downloads to prevent disk exhaustion."""
+    base_dir = os.path.dirname(__file__)
+    target_dirs = [
+        os.path.join(base_dir, "storage"),
+        os.path.join(base_dir, "downloads"),
+    ]
+    for d in target_dirs:
+        os.makedirs(d, exist_ok=True)
     
     while True:
         try:
-            await asyncio.sleep(120)  # Every 2 minutes (Cloud Shell: 5GB disk)
+            await asyncio.sleep(120)  # Every 2 minutes
             telegram_logic_bot.last_heartbeat = time.time()
             now = time.time()
             cleaned = 0
-            for f in glob.glob(os.path.join(storage_dir, "*")):
-                if os.path.isfile(f):
-                    age = now - os.path.getmtime(f)
-                    if age > 600:  # 10 minutes
-                        os.remove(f)
-                        cleaned += 1
+            for d in target_dirs:
+                for f in glob.glob(os.path.join(d, "*")):
+                    try:
+                        if os.path.isfile(f):
+                            age = now - os.path.getmtime(f)
+                            if age > 600:  # 10 minutes
+                                os.remove(f)
+                                cleaned += 1
+                        elif os.path.isdir(f) and f.endswith(".parts"):
+                            age = now - os.path.getmtime(f)
+                            if age > 600:
+                                shutil.rmtree(f, ignore_errors=True)
+                                cleaned += 1
+                    except Exception:
+                        pass
             if cleaned > 0:
                 log.info("storage cleanup done", extra={"files_removed": cleaned})
         except Exception as e:
