@@ -110,7 +110,7 @@ def generate_video_thumbnail(file_path: str, output_thumb_path: str | None = Non
 
 def get_video_attributes(
     file_path: str,
-    duration: int | None = None,
+    duration: int | dict | None = None,
     width: int | None = None,
     height: int | None = None,
 ) -> list[DocumentAttributeVideo]:
@@ -118,7 +118,12 @@ def get_video_attributes(
     Return a list containing a DocumentAttributeVideo configured with duration,
     width, height, and streaming support for Telegram.
     """
-    if duration is None or width is None or height is None:
+    if isinstance(duration, dict):
+        meta = duration
+        duration = meta.get("duration", 0)
+        width = width if width is not None else meta.get("width", 0)
+        height = height if height is not None else meta.get("height", 0)
+    elif duration is None or width is None or height is None:
         meta = extract_video_metadata(file_path)
         duration = duration if duration is not None else meta.get("duration", 0)
         width = width if width is not None else meta.get("width", 0)
