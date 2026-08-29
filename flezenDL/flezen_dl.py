@@ -26,6 +26,20 @@ _HEADERS = {
 }
 
 
+def _get_flezen_session() -> Optional[requests.Session]:
+    """
+    Return a requests.Session pre-configured with the Flezen account cookie if available.
+    """
+    cookie = os.getenv("FLEZEN_COOKIE") or os.getenv("FLEZEN_ACCOUNT_COOKIE")
+    if not cookie:
+        return None
+
+    session = requests.Session()
+    session.headers.update(_HEADERS)
+    session.headers["Cookie"] = cookie.strip()
+    return session
+
+
 def extract_flezen_id(url: str) -> Optional[str]:
     """
     Extract the Flezen share ID from a URL.
@@ -51,6 +65,25 @@ def extract_all_flezen_urls(text: str) -> List[str]:
     return urls
 
 
+def _try_save_and_resolve_stream(share_id: str, session: requests.Session) -> Optional[str]:
+    """
+    Save file to logged-in user account via /user/save?id=<share_id>
+    and retrieve the direct download/stream link from the dashboard.
+    """
+    try:
+        save_url = f"https://flezen.com/user/save?id={share_id}"
+        r = session.get(save_url, allow_redirects=True, timeout=15)
+        if r.status_code == 200:
+            files_page = session.get("https://flezen.com/user/files", timeout=15)
+            if files_page.status_code == 200:
+                m = re.search(r"href=['\"](https?://[^'\"]*(?:download|stream|file)[^'\"]*)['\"]", files_page.text)
+                if m:
+                    return m.group(1)
+    except Exception as e:
+        log.warning(f"Failed to auto-save file {share_id} to Flezen account: {e}")
+    return None
+
+
 def get_flezen_info(url: str) -> Dict[str, Any]:
     """
     Fetch file metadata for a Flezen share link.
@@ -61,8 +94,11 @@ def get_flezen_info(url: str) -> Dict[str, Any]:
 
     page_url = f"https://flezen.com/s/{share_id}"
 
+    session = _get_flezen_session() or requests.Session()
+    session.headers.update(_HEADERS)
+
     try:
-        r = requests.get(page_url, headers=_HEADERS, timeout=15)
+        r = session.get(page_url, timeout=15)
     except Exception as e:
         log.error(f"Failed to connect to Flezen: {e}")
         raise FlezenError(f"Could not reach Flezen: {e}") from e
@@ -113,6 +149,11 @@ def get_flezen_info(url: str) -> Dict[str, Any]:
     views_match = re.search(r'<i class=["\']ri-eye-line["\'][^>]*>.*?<p class=["\']text-gray-600["\']>(\d+)</p>', page_html, re.DOTALL)
     views = int(views_match.group(1)) if views_match else 0
 
+    # If an authenticated session is active, try to resolve download link
+    download_url = None
+    if _get_flezen_session():
+        download_url = _try_save_and_resolve_stream(share_id, session)
+
     return {
         "share_id": share_id,
         "filename": filename,
@@ -120,6 +161,7 @@ def get_flezen_info(url: str) -> Dict[str, Any]:
         "upload_date": upload_date,
         "views": views,
         "url": page_url,
+        "download_url": download_url,
     }
 
 
@@ -134,7 +176,7 @@ def download_flezen_file(
     download_url = info.get("download_url")
     if not download_url:
         raise FlezenDirectError(
-            "Flezen protected file streaming requires mobile app authentication token.\n"
+            "Flezen protected file streaming requires FLEZEN_COOKIE in bot config.\n"
             "File details: " + info.get("filename", "Unknown") + " (" + str(info.get("size", 0)) + " bytes)"
         )
 
