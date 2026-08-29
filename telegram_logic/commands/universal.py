@@ -49,9 +49,10 @@ async def handle_dl(event):
     from ..terabox_exp import process_terabox_experimental
     from ..diskwala import process_diskwala
     from telegram_logic.universal import process_universal
-    from telegram_logic.social_dl import extract_all_social_urls, process_social
     from flareDL import extract_all_flare_urls
     from telegram_logic.flare import process_flare
+    from flezenDL import extract_all_flezen_urls
+    from telegram_logic.flezen import process_flezen
 
     jobs = []
     seen_urls = set()
@@ -75,6 +76,11 @@ async def handle_dl(event):
         if u not in seen_urls:
             seen_urls.add(u)
             jobs.append((u, process_flare))
+
+    for u in extract_all_flezen_urls(arg):
+        if u not in seen_urls:
+            seen_urls.add(u)
+            jobs.append((u, process_flezen))
 
     # If specific platform URLs were found in arguments
     if jobs:
