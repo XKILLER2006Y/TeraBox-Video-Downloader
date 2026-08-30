@@ -32,11 +32,7 @@ class MixDropNotFound(MixDropError):
 
 
 _MIXDROP_RE = re.compile(
-    # md*. mirrors use literal subdomain dots — the old unescaped `md*.`
-    # matched any m*.to host ("m.to", "md.co", ...).
-    r'https?://(?:www\.)?(?:mixdrop\.(?:to|co|ch)|'
-    r'md[-a-z0-9]*\.(?:to|co|ch|cc|cx|st|sx|se|gz|vf|hk|si|ws|pm))'
-    r'/(?:e|f|embed|v)/([A-Za-z0-9]+)',
+    r'https?://(?:[\w.-]+\.)?(?:mixdrop\.[a-z]{2,}|md[-a-z0-9]*\.[a-z]{2,})/(?:e|f|embed|v|d)/([A-Za-z0-9_-]+)',
     re.I,
 )
 

@@ -27,9 +27,9 @@ class CatBoxError(Exception):
     """Base exception for CatBox resolver."""
 
 
-# https://files.catbox.moe/<filename> or https://catbox.moe/user/...
+# https://files.catbox.moe/<filename> or https://litterbox.catbox.moe/... or https://catbox.moe/user/...
 _CATBOX_RE = re.compile(
-    r'https?://(?:files\.catbox\.moe|catbox\.moe/user)/[^\s"\']+',
+    r'https?://(?:(?:files|litterbox|litter)\.catbox\.moe|catbox\.moe/(?:user|c))/[^\s"\']+',
     re.I,
 )
 

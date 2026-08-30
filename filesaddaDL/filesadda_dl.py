@@ -44,12 +44,9 @@ class FilesAddaCaptcha(FilesAddaError):
 # ── URL patterns ──────────────────────────────────────────────────────────────
 # Matches filesadda.site/<code> and similar XFileSharing clones
 _FILEADDA_RE = re.compile(
-    # streamtape.com / filelions.to removed — they belong to their own
-    # resolvers; keeping them here hijacked those links (route order).
-    r'https?://(?:filesadda\.site|file-upload\.com|oload\.info|'
-    r'streamsb\.com|filesrand\.com|'
-    r'File-Upload\.org|酷云Pan|upload-1fichier\.com)'
-    r'/([A-Za-z0-9]{4,20})',
+    r'https?://(?:[\w.-]+\.)?(?:filesadda\.[a-z]{2,}|file-upload\.[a-z]{2,}|oload\.[a-z]{2,}|'
+    r'streamsb\.[a-z]{2,}|filesrand\.[a-z]{2,}|upload-1fichier\.[a-z]{2,})'
+    r'/([A-Za-z0-9_-]{4,24})',
     re.IGNORECASE,
 )
 

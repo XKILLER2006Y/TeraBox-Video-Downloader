@@ -30,10 +30,9 @@ class StreamTapeNotFound(StreamTapeError):
 
 # https://streamtape.com/v/<code> or /e/<code> or /video/<code> or /get/<code>
 _STREAMTAPE_RE = re.compile(
-    r'https?://(?:www\.)?(?:streamtape\.com|sowhy\.xyz|sstrema\.com|streamta\.pe|'
-    r'streamtape\.cc|streamtape\.to|streamtape\.xyz|tape\.noobloli\.buzz|'
-    r'streamtaped\.com|tapewood\.ch|turbovio\.com)'
-    r'/(?:v|e|video|get|embed)/([A-Za-z0-9]+)',
+    r'https?://(?:[\w.-]+\.)?(?:streamtape\.[a-z]{2,}|sowhy\.xyz|sstrema\.com|streamta\.pe|'
+    r'tape\.noobloli\.buzz|streamtaped\.com|tapewood\.ch|turbovio\.com|stape\.[a-z]{2,}|tape\.stream)'
+    r'/(?:v|e|video|get|embed|f)/([A-Za-z0-9_-]+)',
     re.I,
 )
 

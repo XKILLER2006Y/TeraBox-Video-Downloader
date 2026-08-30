@@ -30,11 +30,9 @@ class FileLionsNotFound(FileLionsError):
 
 
 _FILELIONS_RE = re.compile(
-    r'https?://(?:www\.)?(?:filelions\.to|filelions\.me|filelions\.ai|'
-    r'filelions\.dev|ahvsh\.com|kissasian\.ru|'
-    r'streamhide\.com|wolfstream\.tv|wootly\.ch|'
-    r'megaupload\.nz|letsupload\.io)'
-    r'/(?:v|e|embed|f)/([A-Za-z0-9]+)',
+    r'https?://(?:[\w.-]+\.)?(?:filelions\.[a-z]{2,}|filelion\.[a-z]{2,}|lionfile\.[a-z]{2,}|'
+    r'ahvsh\.[a-z]{2,}|streamhide\.[a-z]{2,}|wolfstream\.[a-z]{2,}|wootly\.[a-z]{2,}|letsupload\.[a-z]{2,})'
+    r'/(?:v|e|embed|f|d)/([A-Za-z0-9_-]+)',
     re.I,
 )
 

@@ -31,12 +31,10 @@ class StreamWishNotFound(StreamWishError):
 
 
 _STREAMWISH_RE = re.compile(
-    r'https?://(?:www\.)?(?:streamwish\.to|streamwish\.xyz|streamwish\.com|'
-    r'streamtape\.xyz|ashdyn\.net|awish\.xyz|cine\.xyz|kissasian\.sh|'
-    r'streamani\.net|embeds\.aBest|ouo\.today|sbplay\.org|'
-    r'mega\.nz/embed|krakenfiles\.com|fembed\.com|'
-    r'streamcdn\.xyz|kissmanga\.link|vetstream\.xyz)'
-    r'/(?:v|e|embed|f)/([A-Za-z0-9]+)',
+    r'https?://(?:[\w.-]+\.)?(?:streamwish\.[a-z]{2,}|wishfast\.[a-z]{2,}|awish\.[a-z]{2,}|'
+    r'dwish\.[a-z]{2,}|mwish\.[a-z]{2,}|flaswish\.[a-z]{2,}|sfastwish\.[a-z]{2,}|'
+    r'strwish\.[a-z]{2,}|ashdyn\.[a-z]{2,}|cine\.[a-z]{2,}|sbplay\.[a-z]{2,}|fembed\.[a-z]{2,})'
+    r'/(?:v|e|embed|f|d)/([A-Za-z0-9_-]+)',
     re.I,
 )
 

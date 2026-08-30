@@ -30,7 +30,7 @@ class MediaFireNotFound(MediaFireError):
 
 
 _MEDIAFIRE_RE = re.compile(
-    r'https?://(?:www\.)?mediafire\.com/(?:file|view)/([A-Za-z0-9]+)',
+    r'https?://(?:[\w.-]+\.)?mediafire\.com/(?:file|view|download|file_premium)/([A-Za-z0-9_-]+)',
     re.I,
 )
 
