@@ -25,3 +25,6 @@ brotli==1.1.0
 # Social media downloader (YouTube, Instagram, TikTok, Twitter/X, Reddit, etc.)
 yt-dlp>=2025.1.15
 
+# Testing & Verification
+pytest>=8.0.0
+

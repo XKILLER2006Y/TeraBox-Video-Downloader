@@ -257,7 +257,7 @@ check("context propagates to child tasks", any(
     e.get("msg") == "from child" and e.get("user_id") == 5555 for e in entries))
 
 # restore default logging so later output stays clean
-setup_logging(log_file="/tmp/opencode/sl_default.log")
+setup_logging(log_file="/tmp/sl_default.log")
 
 
 # ── 19. Inline mode & user stats ──────────────────────────────────────────────
@@ -346,8 +346,8 @@ FFMPEG = _shutil.which("ffmpeg")
 check("ffmpeg present for remux regression", FFMPEG is not None)
 
 if FFMPEG:
-    ts_path = "/tmp/opencode/rm_test.ts"
-    mp4_path = "/tmp/opencode/rm_test.mp4"
+    ts_path = "/tmp/rm_test.ts"
+    mp4_path = "/tmp/rm_test.mp4"
     gen = _sp2.run(
         [FFMPEG, "-y", "-loglevel", "error", "-f", "lavfi",
          "-i", "testsrc=size=128x96:rate=10:duration=1",
@@ -406,7 +406,7 @@ check("no flag when absent", c is False and t == "plain link only")
 
 FF = _shutil.which("ffmpeg")
 if FF:
-    big_src = "/tmp/opencode/comp_in.mp4"
+    big_src = "/tmp/comp_in.mp4"
     gen = _sp2.run(
         [FF, "-y", "-loglevel", "error", "-f", "lavfi",
          "-i", "testsrc=size=320x240:rate=15:duration=3",
@@ -439,8 +439,8 @@ if FF:
         CM.MIN_SIZE_FOR_COMPRESSION = real_min
 
 check("small files skip compression entirely",
-      maybe_compress("/tmp/opencode/definitely-missing.mp4") ==
-      ("/tmp/opencode/definitely-missing.mp4", ""))
+      maybe_compress("/tmp/definitely-missing.mp4") ==
+      ("/tmp/definitely-missing.mp4", ""))
 
 # heartbeat var exists for /health
 import telegram_logic.bot as TB

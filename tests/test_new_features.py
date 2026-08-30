@@ -305,7 +305,7 @@ tl_functions.upload.SaveBigFilePartRequest = lambda **kw: type("R", (), kw)()
 
 async def _fake_upload():
     payload = os.urandom(FU.CHUNK_SIZE * 3 + 1234)  # 4 parts, last partial
-    tmp = "/tmp/opencode/fastup_test.bin"
+    tmp = "/tmp/fastup_test.bin"
     with open(tmp, "wb") as f:
         f.write(payload)
     captured_parts.clear()
