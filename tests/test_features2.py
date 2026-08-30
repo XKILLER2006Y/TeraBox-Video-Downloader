@@ -137,6 +137,7 @@ check("over-release is safe", 3002 not in _user_active)
 _user_active.clear()
 
 
-print(f"\n{'=' * 54}")
-print(f"Results: {PASS} passed, {FAIL} failed")
-sys.exit(1 if FAIL else 0)
+if __name__ == "__main__":
+    print(f"\n{'=' * 54}")
+    print(f"Results: {PASS} passed, {FAIL} failed")
+    sys.exit(1 if FAIL else 0)

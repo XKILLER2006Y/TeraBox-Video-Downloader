@@ -36,9 +36,9 @@ log = logging.getLogger(__name__)
 
 # ── Types & constants ──────────────────────────────────────────────────────────────────────────
 
-MODE = Literal["get", "exp", "exphd", "dw", "dl"]
+MODE = Literal["get", "exp", "exphd", "dw", "dl", "social", "flare", "flezen"]
 _CACHE_COLLECTION = "cache"
-_BUCKETS = ("get", "exp", "exphd", "dw", "dl")
+_BUCKETS = ("get", "exp", "exphd", "dw", "dl", "social", "flare", "flezen")
 
 # ── In-memory snapshot for /random ────────────────────────────────────────────
 # Avoids a Firestore read on every /random call.
@@ -95,6 +95,10 @@ def search_in_cache(surl: str, user_mode: MODE) -> int:
       exp   → exphd, exp   (HD cache serves SD requests)
       exphd → exphd only
       dw    → dw only
+      dl    → dl only
+      social→ social only
+      flare → flare only
+      flezen→ flezen only
 
     Parallelizes Firestore reads for lower latency on misses.
     """
@@ -105,9 +109,17 @@ def search_in_cache(surl: str, user_mode: MODE) -> int:
     elif user_mode == "dw":
         search_order = ["dw"]
     elif user_mode == "dl":
-        search_order = ["dl"]   # universal links: own bucket only
-    else:  # exphd
+        search_order = ["dl"]
+    elif user_mode == "social":
+        search_order = ["social"]
+    elif user_mode == "flare":
+        search_order = ["flare"]
+    elif user_mode == "flezen":
+        search_order = ["flezen"]
+    elif user_mode == "exphd":
         search_order = ["exphd"]
+    else:
+        search_order = [user_mode]
 
     def _read_bucket(bucket: str) -> tuple[str, int]:
         """Read a single bucket and return (bucket_name, msg_id)."""

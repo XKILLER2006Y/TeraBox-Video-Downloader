@@ -115,9 +115,11 @@ async def process_flezen(event, flezen_url: str):
                     reply_to=event.message.id,
                 )
                 await status.delete()
-                await stats_ok(user_mode, is_cache=True, latency=time.time() - total_start)
-                await record_history(chat_id, link_id, fn, f.size, user_mode)
-                await bump_today(chat_id)
+                stats_ok(f.size)
+                await asyncio.to_thread(record_history, chat_id, fn, f"flezen:{link_id}", f.size)
+                if not is_admin:
+                    await asyncio.to_thread(bump_today, chat_id)
+                rate_limit.register_success(chat_id)
                 return
             except Exception as e:
                 log.warning(f"Cache delivery failed: {e}")
@@ -129,12 +131,14 @@ async def process_flezen(event, flezen_url: str):
             info = await asyncio.to_thread(get_flezen_info, flezen_url)
         except FlezenDirectError as e:
             await _safe_send(status.edit, f"⚠️ {e}")
-            await stats_fail(user_mode, str(e), latency=time.time() - total_start)
+            stats_fail()
+            rate_limit.register_failure(chat_id)
             return
         except Exception as e:
             log.error(f"Flezen resolve failed for {flezen_url}: {e}")
             await _safe_send(status.edit, f"❌ Failed to resolve Flezen link: {e}")
-            await stats_fail(user_mode, str(e), latency=time.time() - total_start)
+            stats_fail()
+            rate_limit.register_failure(chat_id)
             return
 
         if cancel_event.is_set():
@@ -149,23 +153,23 @@ async def process_flezen(event, flezen_url: str):
         ok, reason = check_size_limit(size_bytes, is_admin)
         if not ok:
             await _safe_send(status.edit, f"❌ File is too large ({size_str}). {reason}")
-            await stats_fail(user_mode, "size_limit_exceeded", latency=time.time() - total_start)
+            stats_fail()
+            rate_limit.register_failure(chat_id)
             return
 
         # Check if direct download URL is present
         download_url = info.get("download_url")
         if not download_url:
-            # Inform user with metadata details
             caption = (
                 f"📦 **{filename}**\n"
                 f"📐 Size: `{size_str}`\n"
-                f"👁️ Views: `{info.get("views", 0)}`\n"
-                f"📅 Uploaded: `{info.get("upload_date", "N/A")}`\n\n"
+                f"👁️ Views: `{info.get('views', 0)}`\n"
+                f"📅 Uploaded: `{info.get('upload_date', 'N/A')}`\n\n"
                 f"⚠️ *Flezen mobile app token required for protected download.*\n"
                 f"🔗 [Open in Flezen App]({flezen_url})"
             )
             await _safe_send(status.edit, caption)
-            await stats_ok(user_mode, is_cache=False, latency=time.time() - total_start)
+            stats_ok(size_bytes)
             return
 
         # — Phase 3: Download ———————————————————————————————————————————————
@@ -188,7 +192,8 @@ async def process_flezen(event, flezen_url: str):
             log.error(f"Flezen download failed: {e}")
             await _safe_send(status.edit, f"❌ Download failed: {e}")
             _cleanup_files(output_file)
-            await stats_fail(user_mode, str(e), latency=time.time() - total_start)
+            stats_fail()
+            rate_limit.register_failure(chat_id)
             return
 
         if cancel_event.is_set():
@@ -201,7 +206,7 @@ async def process_flezen(event, flezen_url: str):
         # — Phase 4: Video Metadata & Thumbnail —————————————————————————————
         meta = extract_video_metadata(downloaded_path)
         thumb_path = generate_video_thumbnail(downloaded_path)
-        video_attrs = get_video_attributes(downloaded_path, meta, filename)
+        video_attrs = get_video_attributes(downloaded_path, meta)
 
         # — Phase 5: Storage Upload & Delivery ———————————————————————————————
         ul_start = time.time()
@@ -212,8 +217,7 @@ async def process_flezen(event, flezen_url: str):
 
             uploaded_file = await _pre_upload_file(
                 downloaded_path,
-                progress_callback=upload_cb,
-                cancel_event=cancel_event,
+                progress_cb=upload_cb,
             )
 
             if cancel_event.is_set():
@@ -225,13 +229,17 @@ async def process_flezen(event, flezen_url: str):
             total_time = time.time() - total_start
             caption = _build_flezen_caption(filename, size_str, dl_time, ul_time, total_time)
 
-            storage_msg = await _upload_to_storage(
-                uploaded_file,
-                caption=caption,
-                thumb=thumb_path,
-                attributes=video_attrs,
-                supports_streaming=True,
-            )
+            storage_msg = None
+            if STORAGE_GROUP_ID:
+                try:
+                    storage_msg = await _upload_to_storage(
+                        uploaded_file,
+                        filename=filename,
+                        thumb=thumb_path,
+                        attributes=video_attrs,
+                    )
+                except Exception as e:
+                    log.warning(f"Storage upload failed: {e}")
 
             # Send to user
             await bot.send_file(
@@ -245,17 +253,20 @@ async def process_flezen(event, flezen_url: str):
             )
 
             if storage_msg:
-                await add_to_cache(link_id, storage_msg.id, filename, size_bytes, user_mode)
+                await asyncio.to_thread(add_to_cache, link_id, storage_msg.id, user_mode)
 
             await status.delete()
-            await stats_ok(user_mode, is_cache=False, latency=total_time)
-            await record_history(chat_id, link_id, filename, size_bytes, user_mode)
-            await bump_today(chat_id)
+            stats_ok(size_bytes)
+            await asyncio.to_thread(record_history, chat_id, filename, f"flezen:{link_id}", size_bytes)
+            if not is_admin:
+                await asyncio.to_thread(bump_today, chat_id)
+            rate_limit.register_success(chat_id)
 
         except Exception as e:
             log.error(f"Flezen upload/delivery failed: {e}")
             await _safe_send(status.edit, f"❌ Delivery failed: {e}")
-            await stats_fail(user_mode, str(e), latency=time.time() - total_start)
+            stats_fail()
+            rate_limit.register_failure(chat_id)
         finally:
             _cleanup_files(downloaded_path, thumb_path)
 

@@ -31,16 +31,14 @@ async def cmd_start(event):
     log.info("received /start", extra={"chat_id": event.chat_id, "has_arg": bool(arg)})
     await event.respond(WELCOME_MESSAGE)
 
-    urls = extract_all_terabox_url_exp(arg)
-    if not urls:
+    if not arg:
         return
 
     rid = new_request_id()
     bind_context(request_id=rid, user_id=event.chat_id)
-    log.info("start carried download link", extra={"url_count": len(urls)})
+    log.info("start carried download link", extra={"arg": arg[:60]})
 
-    from ..terabox_exp import process_terabox_experimental
-    for url in urls[:1]:  # single link per /start keeps first contact light
-        await process_terabox_experimental(event, url)
-
+    from .universal import handle_dl
+    # Let handle_dl parse and route whatever URL was passed to /start
+    await handle_dl(event)
     raise events.StopPropagation

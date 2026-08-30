@@ -16,6 +16,7 @@ Requirements:
 """
 
 import os
+import math
 import logging
 import subprocess
 import shutil
@@ -116,19 +117,113 @@ def _parse_m3u8_segments(manifest_text: str, manifest_url: str) -> list[str]:
     return segments
 
 
+def _download_direct_file_multipart(
+    url: str,
+    output_file: str,
+    total_size: int,
+    cancel_event: threading.Event | None = None,
+    progress_callback=None,
+    num_threads: int = 4,
+) -> None:
+    """Zero-copy multi-threaded direct file download using os.pwrite."""
+    log.info(f"Multi-part zero-copy download: {output_file} ({total_size / 1e6:.2f} MB, {num_threads} threads)")
+
+    with open(output_file, "wb") as f:
+        f.truncate(total_size)
+
+    chunk_part_size = math.ceil(total_size / num_threads)
+    ranges = []
+    for i in range(num_threads):
+        start = i * chunk_part_size
+        end = min(start + chunk_part_size - 1, total_size - 1)
+        if start <= end:
+            ranges.append((start, end, i))
+
+    progress_lock = threading.Lock()
+    bytes_downloaded = 0
+
+    def _worker(fd, start_byte, end_byte, worker_idx):
+        nonlocal bytes_downloaded
+        session = _build_session()
+        headers = {**_PLAIN_HEADERS, "Range": f"bytes={start_byte}-{end_byte}"}
+
+        for attempt in range(3):
+            if cancel_event and cancel_event.is_set():
+                raise CancelledError("Download cancelled")
+            try:
+                with session.get(url, headers=headers, stream=True, timeout=60) as r:
+                    if r.status_code not in (200, 206):
+                        raise Exception(f"HTTP {r.status_code} on range request")
+
+                    curr_offset = start_byte
+                    for chunk in r.iter_content(chunk_size=CHUNK_SIZE):
+                        if cancel_event and cancel_event.is_set():
+                            raise CancelledError("Download cancelled")
+                        if not chunk:
+                            continue
+                        os.pwrite(fd, chunk, curr_offset)
+                        curr_offset += len(chunk)
+
+                        with progress_lock:
+                            bytes_downloaded += len(chunk)
+                            curr_done = min(bytes_downloaded, total_size)
+
+                        if progress_callback:
+                            progress_callback(curr_done, total_size)
+                return
+            except CancelledError:
+                raise
+            except Exception as e:
+                if attempt == 2:
+                    raise Exception(f"Worker {worker_idx} failed after 3 attempts: {e}")
+                time.sleep(1 + attempt)
+
+    fd = os.open(output_file, os.O_RDWR)
+    try:
+        with ThreadPoolExecutor(max_workers=num_threads, thread_name_prefix="part-dl") as ex:
+            futures = [ex.submit(_worker, fd, s, e, idx) for (s, e, idx) in ranges]
+            for f in futures:
+                f.result()
+    finally:
+        os.close(fd)
+
+    log.info(f"Multi-part download completed: {output_file}")
+
+
 def _download_direct_file(
     url: str,
     output_file: str,
     cancel_event: threading.Event | None = None,
     progress_callback=None,
 ) -> None:
-    """Download a direct video file with streaming + progress reporting."""
+    """Download a direct video file with streaming + multi-part optimization."""
     log.info(f"Downloading direct file from: {url}")
 
     session = _build_session()
+    total = 0
+    accept_ranges = False
+
+    try:
+        head_r = session.head(url, timeout=15, allow_redirects=True)
+        if head_r.status_code == 200:
+            total = int(head_r.headers.get("content-length", 0))
+            accept_ranges = head_r.headers.get("accept-ranges", "").lower() == "bytes"
+    except Exception:
+        pass
+
+    # Use multi-part zero-copy download for large files (> 10MB) if Content-Length is known
+    if total > 10 * 1024 * 1024 and accept_ranges:
+        try:
+            _download_direct_file_multipart(url, output_file, total, cancel_event, progress_callback)
+            return
+        except CancelledError:
+            raise
+        except Exception as e:
+            log.warning(f"Multi-part download fallback to single stream: {e}")
+
     with session.get(url, stream=True, timeout=120) as r:
         r.raise_for_status()
-        total = int(r.headers.get("content-length", 0))
+        total = total or int(r.headers.get("content-length", 0))
         downloaded = 0
 
         with open(output_file, "wb") as f:

@@ -324,6 +324,7 @@ check("InputFileBig parts count", res.parts == expected_parts)
 tl_functions.upload.SaveBigFilePartRequest = real_save
 
 # ── Summary ─────────────────────────────────———————————————————————
-print(f"\n{'=' * 54}")
-print(f"Results: {PASS} passed, {FAIL} failed")
-sys.exit(1 if FAIL else 0)
+if __name__ == "__main__":
+    print(f"\n{'=' * 54}")
+    print(f"Results: {PASS} passed, {FAIL} failed")
+    sys.exit(1 if FAIL else 0)

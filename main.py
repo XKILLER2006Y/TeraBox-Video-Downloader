@@ -259,6 +259,7 @@ async def run_bot() -> None:
 
 async def _storage_cleanup_loop():
     """Periodically clean old files from storage and downloads to prevent disk exhaustion."""
+    from telegram_logic.bot import is_file_active
     base_dir = os.path.dirname(__file__)
     target_dirs = [
         os.path.join(base_dir, "storage"),
@@ -276,6 +277,8 @@ async def _storage_cleanup_loop():
             for d in target_dirs:
                 for f in glob.glob(os.path.join(d, "*")):
                     try:
+                        if is_file_active(f):
+                            continue
                         if os.path.isfile(f):
                             age = now - os.path.getmtime(f)
                             if age > 600:  # 10 minutes

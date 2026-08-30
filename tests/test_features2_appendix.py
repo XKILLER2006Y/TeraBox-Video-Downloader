@@ -662,9 +662,10 @@ check("legacy: terasharefile.com keeps 1",
 check("legacy: 1024terabox.com strips 1",
       extract_surl("https://1024terabox.com/s/1abc123DEF") == "abc123DEF")
 
-print(f"\n{'=' * 54}")
-print(f"Results: {PASS} passed, {FAIL} failed")
-sys.exit(1 if FAIL else 0)
+if __name__ == "__main__":
+    print(f"\n{'=' * 54}")
+    print(f"Results: {PASS} passed, {FAIL} failed")
+    sys.exit(1 if FAIL else 0)
 
 
 # ── 26. terasharefile.com domain-aware surl extraction ───────────────────────

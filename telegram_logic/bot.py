@@ -31,6 +31,37 @@ STORAGE_GROUP_ID = env_int("STORAGE_GROUP_ID")
 # — Active-task tracking (for cancel) ————————————————————————————————————————————
 active_tasks: dict[tuple[int, str], threading.Event] = {}
 
+# — Active disk file tracking (prevents GC cleanup during long transfers) ———————
+_active_disk_paths: set[str] = set()
+_active_disk_lock = threading.Lock()
+
+
+def mark_file_active(filepath: str | None) -> None:
+    """Register a filepath as actively downloading/uploading to protect from GC."""
+    if not filepath:
+        return
+    abs_p = os.path.abspath(filepath)
+    with _active_disk_lock:
+        _active_disk_paths.add(abs_p)
+
+
+def unmark_file_active(filepath: str | None) -> None:
+    """Unregister a filepath once transfer/upload finishes."""
+    if not filepath:
+        return
+    abs_p = os.path.abspath(filepath)
+    with _active_disk_lock:
+        _active_disk_paths.discard(abs_p)
+
+
+def is_file_active(filepath: str | None) -> bool:
+    """Check if a filepath is currently part of an active transfer."""
+    if not filepath:
+        return False
+    abs_p = os.path.abspath(filepath)
+    with _active_disk_lock:
+        return abs_p in _active_disk_paths
+
 # — Per-user concurrency cap ———————————————————————————————————————————————————————
 # Prevents one spammy user from occupying every download slot.
 # Admins are exempt. Slots are held only while a download actually runs.
@@ -144,18 +175,22 @@ async def _pre_upload_file(filepath: str, progress_cb=None):
     import os
     from .fast_upload import upload_file_fast, is_large
     
-    file_size = os.path.getsize(filepath)
-    
-    # Use fast parallel uploads for large files
-    if is_large(file_size):
-        return await upload_file_fast(bot, filepath, progress_cb)
-    
-    # Small files use standard upload
-    return await _safe_send(
-        bot.upload_file,
-        filepath,
-        progress_callback=progress_cb,
-    )
+    mark_file_active(filepath)
+    try:
+        file_size = os.path.getsize(filepath)
+        
+        # Use fast parallel uploads for large files
+        if is_large(file_size):
+            return await upload_file_fast(bot, filepath, progress_cb)
+        
+        # Small files use standard upload
+        return await _safe_send(
+            bot.upload_file,
+            filepath,
+            progress_callback=progress_cb,
+        )
+    finally:
+        unmark_file_active(filepath)
 
 async def _upload_to_storage(file, filename: str, progress_cb=None, thumb=None, attributes=None):
     """

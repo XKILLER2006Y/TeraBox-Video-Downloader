@@ -3,11 +3,12 @@ FastTelethon: Parallel chunked uploads/downloads to Telegram.
 
 Based on the painor/FastTelethon gist (MIT licensed).
 Uses multiple parallel senders to Telegram DCs for faster uploads.
-Memory-efficient: reads chunks from disk instead of loading entire file.
+Memory-efficient: reads chunks from disk via pread instead of loading entire file.
 """
 import os
 import math
 import asyncio
+import threading
 from .structured_log import ctx_logger
 from telethon import utils  # noqa: F401 — kept for future Telethon helpers
 from telethon.tl import types, functions
@@ -16,38 +17,33 @@ log = ctx_logger(__name__)
 
 # Config
 CHUNK_SIZE = 512 * 1024  # 512KB chunks (optimal for parallel uploads)
-MAX_PARALLEL = 4  # Parallel upload streams
+DEFAULT_MAX_PARALLEL = 8  # Parallel upload streams
 
 
-async def _send_partial(
-    client,
-    file_id,
-    file_part,
-    file_total_parts,
-    file_size,
-    chunk_data,
-    progress_callback=None,
-):
-    """Send a single chunk to Telegram."""
-    await client._sender.send(
-        functions.upload.SaveBigFilePartRequest(
-            file_id=file_id,
-            file_part=file_part,
-            file_total_parts=file_total_parts,
-            bytes=chunk_data,
-        )
-    )
-    if progress_callback:
-        bytes_sent = min((file_part + 1) * CHUNK_SIZE, file_size)
-        progress_callback(bytes_sent, file_size)
+async def _send_part_with_retry(client, file_id, part_idx, file_total_parts, chunk_data, max_retries=3):
+    """Send a single chunk to Telegram with retries on transient errors."""
+    for attempt in range(max_retries):
+        try:
+            await client._sender.send(
+                functions.upload.SaveBigFilePartRequest(
+                    file_id=file_id,
+                    file_part=part_idx,
+                    file_total_parts=file_total_parts,
+                    bytes=chunk_data,
+                )
+            )
+            return
+        except Exception as e:
+            if attempt == max_retries - 1:
+                raise
+            log.warning(f"Chunk {part_idx} attempt {attempt + 1} failed: {e}, retrying in 1s...")
+            await asyncio.sleep(1 + attempt)
 
 
 async def _read_chunk(f, offset, size):
     """
     Read a chunk at an absolute offset. Uses os.pread — a single atomic
-    syscall that never mutates the shared file position, so concurrent
-    readers can never interleave seek+read and upload bytes for the wrong
-    part index (silent corruption).
+    syscall that never mutates the shared file position.
     """
     loop = asyncio.get_running_loop()
     def _do_read():
@@ -59,12 +55,15 @@ async def upload_file_fast(
     client,
     file_path: str,
     progress_callback=None,
+    max_parallel: int = DEFAULT_MAX_PARALLEL,
+    cancel_event: threading.Event | None = None,
 ) -> types.InputFileBig:
     """
     Upload a file to Telegram servers using parallel chunked uploads.
     
-    Memory-efficient: reads chunks from disk sequentially instead of loading
-    the entire file into memory. Only MAX_PARALLEL chunks are in memory at once.
+    Memory-efficient: reads chunks from disk on demand.
+    Bounded worker queue ensures no task explosion on multi-GB files.
+    Strictly monotonic progress reporting.
     """
     file_size = os.path.getsize(file_path)
     if file_size == 0:
@@ -72,37 +71,62 @@ async def upload_file_fast(
     else:
         file_total_parts = math.ceil(file_size / CHUNK_SIZE)
 
-    # 63-bit random file id (telethon.utils.generate_random_long was
-    # removed in newer Telethon versions)
     file_id = int.from_bytes(os.urandom(8), "big") & 0x7FFFFFFFFFFFFFFF
     
-    log.info(f"Fast upload: {os.path.basename(file_path)} ({file_size / (1024*1024):.1f} MB, {file_total_parts} parts)")
+    log.info(f"Fast upload: {os.path.basename(file_path)} ({file_size / (1024*1024):.1f} MB, {file_total_parts} parts, workers={max_parallel})")
     
-    sem = asyncio.Semaphore(MAX_PARALLEL)
-    
-    async def _send_with_sem(part_idx):
-        async with sem:
+    # Producer-consumer queue to bound concurrency without creating thousands of tasks
+    queue: asyncio.Queue[int] = asyncio.Queue(maxsize=max_parallel * 2)
+    bytes_uploaded = 0
+    progress_lock = asyncio.Lock()
+
+    async def _worker(handle):
+        nonlocal bytes_uploaded
+        while True:
+            part_idx = await queue.get()
+            if part_idx is None:
+                queue.task_done()
+                break
+
+            if cancel_event and cancel_event.is_set():
+                queue.task_done()
+                raise asyncio.CancelledError("Upload cancelled")
+
             offset = part_idx * CHUNK_SIZE
             size = min(CHUNK_SIZE, file_size - offset)
-            # Read chunk from disk (thread pool — non-blocking)
-            chunk_data = await _read_chunk(_file_handle, offset, size)
-            await _send_partial(
-                client, file_id, part_idx, file_total_parts, file_size,
-                chunk_data, progress_callback,
-            )
-    
-    # Open file once, read chunks on demand — max MAX_PARALLEL chunks in RAM
-    with open(file_path, 'rb') as _file_handle:
-        tasks = [asyncio.create_task(_send_with_sem(i)) for i in range(file_total_parts)]
+            chunk_data = await _read_chunk(handle, offset, size)
+
+            await _send_part_with_retry(client, file_id, part_idx, file_total_parts, chunk_data)
+
+            async with progress_lock:
+                bytes_uploaded += len(chunk_data)
+                current_total = min(bytes_uploaded, file_size)
+
+            if progress_callback:
+                progress_callback(current_total, file_size)
+
+            queue.task_done()
+
+    with open(file_path, "rb") as handle:
+        # Spawn fixed worker pool
+        num_workers = min(max_parallel, file_total_parts)
+        workers = [asyncio.create_task(_worker(handle)) for _ in range(num_workers)]
+
+        # Enqueue parts
         try:
-            await asyncio.gather(*tasks)
-        except (asyncio.CancelledError, Exception):
-            for t in tasks:
-                if not t.done():
-                    t.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
-            raise
-    
+            for part_idx in range(file_total_parts):
+                if cancel_event and cancel_event.is_set():
+                    raise asyncio.CancelledError("Upload cancelled")
+                await queue.put(part_idx)
+
+            # Wait for all parts to be processed
+            await queue.join()
+        finally:
+            # Send stop signals to workers
+            for _ in range(num_workers):
+                await queue.put(None)
+            await asyncio.gather(*workers, return_exceptions=True)
+
     log.info(f"Fast upload complete: {os.path.basename(file_path)}")
     
     return types.InputFileBig(
