@@ -164,7 +164,7 @@ async def _find_cached_video(surl: str, user_mode: str):
         log.warning(f"Cache fetch failed for surl={surl} msg_id={msg_id}: {e}")
         return None
     
-async def _pre_upload_file(filepath: str, progress_cb=None):
+async def _pre_upload_file(filepath: str, progress_cb=None, progress_callback=None, cancel_event=None, **kwargs):
     """
     Upload a file to Telegram's servers and return a reusable InputFile handle.
     This avoids reading from disk multiple times when sending to both
@@ -175,47 +175,51 @@ async def _pre_upload_file(filepath: str, progress_cb=None):
     import os
     from .fast_upload import upload_file_fast, is_large
     
+    cb = progress_cb or progress_callback
     mark_file_active(filepath)
     try:
         file_size = os.path.getsize(filepath)
         
         # Use fast parallel uploads for large files
         if is_large(file_size):
-            return await upload_file_fast(bot, filepath, progress_cb)
+            return await upload_file_fast(bot, filepath, cb)
         
         # Small files use standard upload
         return await _safe_send(
             bot.upload_file,
             filepath,
-            progress_callback=progress_cb,
+            progress_callback=cb,
         )
     finally:
         unmark_file_active(filepath)
 
-async def _upload_to_storage(file, filename: str, progress_cb=None, thumb=None, attributes=None):
+async def _upload_to_storage(file, filename: str = "", caption: str | None = None,
+                             progress_cb=None, progress_callback=None, thumb=None,
+                             attributes=None, file_name: str | None = None, **kwargs):
     """
     Upload a file to the storage group.
     `file` can be a filepath (str) or a pre-uploaded InputFile handle.
     Caption is set to the video filename.
     Returns the sent Message.
     """
-    # If it's a raw filepath, upload normally (with progress).
-    # If it's an InputFile handle, progress_callback is ignored (already uploaded).
-    kwargs = {}
-    if isinstance(file, str) and progress_cb:
-        kwargs["progress_callback"] = progress_cb
+    cb = progress_cb or progress_callback
+    name = filename or file_name or ""
+    cap = caption if caption is not None else name
+    kwargs_send = {}
+    if isinstance(file, str) and cb:
+        kwargs_send["progress_callback"] = cb
     if thumb:
-        kwargs["thumb"] = thumb
+        kwargs_send["thumb"] = thumb
     if attributes:
-        kwargs["attributes"] = attributes
+        kwargs_send["attributes"] = attributes
 
     return await _safe_send(
         bot.send_file,
         STORAGE_GROUP_ID,
         file,
-        caption=filename,
+        caption=cap,
         supports_streaming=True,
-        **kwargs,
+        **kwargs_send,
     )
 
 

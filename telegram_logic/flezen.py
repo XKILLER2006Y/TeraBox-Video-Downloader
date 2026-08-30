@@ -210,7 +210,7 @@ async def process_flezen(event, flezen_url: str):
 
         # — Phase 5: Storage Upload & Delivery ———————————————————————————————
         ul_start = time.time()
-        upload_cb = make_upload_progress_cb(status, filename, size_bytes, cancel_event)
+        upload_cb = make_upload_progress_cb(status, filename, size_str, loop, cancel_btn)
 
         try:
             await _safe_send(status.edit, f"⬆️ Uploading **{filename}**…", buttons=cancel_btn)

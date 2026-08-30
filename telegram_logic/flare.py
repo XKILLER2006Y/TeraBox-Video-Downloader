@@ -213,7 +213,7 @@ async def process_flare(event, flare_url: str):
 
         try:
             uploaded_file = await _cancellable(
-                _pre_upload_file(filepath, cancel_event=cancel_event, progress_callback=ul_progress_cb),
+                _pre_upload_file(filepath, progress_cb=ul_progress_cb),
                 cancel_event,
             )
         except (CancelledError, asyncio.CancelledError):
