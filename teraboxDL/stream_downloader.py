@@ -40,7 +40,7 @@ _PLAIN_HEADERS = {
 }
 
 CHUNK_SIZE = 1 * 1024 * 1024  # 1 MB
-HLS_PARALLEL_SEGMENTS = 4  # parallel segment download workers
+HLS_PARALLEL_SEGMENTS = 8  # parallel segment download workers
 # Segments submitted ahead of the consumption point. Bounds peak disk usage
 # (in-flight parts only) and avoids queueing thousands of futures at once.
 HLS_SUBMIT_WINDOW = HLS_PARALLEL_SEGMENTS * 3
