@@ -39,15 +39,18 @@ def new_request_id() -> str:
 
 
 def bind_context(*, request_id: str | None = None, user_id: int | None = None,
-                 download_id: str | None = None) -> dict[str, Any]:
+                 download_id: str | None = None, chat_id: int | None = None,
+                 link_id: str | None = None, **kwargs: Any) -> dict[str, Any]:
     """Set context vars and return a dict of the set values (for logging)."""
     tokens = {}
     if request_id is not None:
         tokens["request_id"] = request_id_var.set(request_id)
-    if user_id is not None:
-        tokens["user_id"] = user_id_var.set(user_id)
-    if download_id is not None:
-        tokens["download_id"] = download_id_var.set(download_id)
+    uid = user_id if user_id is not None else chat_id
+    if uid is not None:
+        tokens["user_id"] = user_id_var.set(uid)
+    did = download_id if download_id is not None else link_id
+    if did is not None:
+        tokens["download_id"] = download_id_var.set(did)
     return tokens
 
 

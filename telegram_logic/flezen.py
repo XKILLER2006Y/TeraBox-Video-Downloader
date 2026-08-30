@@ -52,7 +52,7 @@ async def process_flezen(event, flezen_url: str):
     """
     Process a Flezen link end-to-end.
     """
-    bind_context(request_id=new_request_id(), chat_id=event.chat_id, link_id=flezen_url)
+    bind_context(request_id=new_request_id(), user_id=event.chat_id, download_id=flezen_url)
     chat_id = event.chat_id
     link_id = extract_flezen_id(flezen_url) or flezen_url
     user_mode = FLEZEN_MODE

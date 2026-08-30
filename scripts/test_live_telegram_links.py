@@ -13,7 +13,7 @@ from universalDL import extract_universal_urls, resolve_universal, is_universal_
 from telegram_logic.social_dl import extract_all_social_urls, is_social_url
 from flareDL import extract_all_flare_urls, get_flare_info
 from flezenDL import extract_all_flezen_urls, get_flezen_info
-from teraboxDL import get_video_info_fast
+from teraboxDL.terabox_dl import get_video_info
 
 links = [
     'https://filesadda.site/86vclgsx66rq',
@@ -101,7 +101,7 @@ def main():
         try:
             if extract_all_terabox_url_exp(u):
                 platform = "TeraBox"
-                info = get_video_info_fast(u)
+                info = get_video_info(u, False)
                 status = "OK"
                 sz = info.get("size_bytes", 0) // (1024 * 1024)
                 details = f"{info.get('file_name', 'video')[:30]} ({sz}MB)"
@@ -141,7 +141,7 @@ def main():
                 details = "Unmatched platform"
         except Exception as e:
             err_str = str(e)
-            if "expired" in err_str.lower() or "deleted" in err_str.lower() or "not found" in err_str.lower() or "removed" in err_str.lower():
+            if "expired" in err_str.lower() or "deleted" in err_str.lower() or "not found" in err_str.lower() or "removed" in err_str.lower() or "no longer valid" in err_str.lower():
                 status = "EXPIRED"
             else:
                 status = "FAIL"

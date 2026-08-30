@@ -52,7 +52,7 @@ async def process_flare(event, flare_url: str):
     """
     Process a Flare / CashSnap / HugeBox link end-to-end.
     """
-    bind_context(request_id=new_request_id(), chat_id=event.chat_id, link_id=flare_url)
+    bind_context(request_id=new_request_id(), user_id=event.chat_id, download_id=flare_url)
     chat_id = event.chat_id
     link_id = extract_flare_id(flare_url) or flare_url
     user_mode = FLARE_MODE
