@@ -30,6 +30,7 @@ from streamwishDL import is_streamwish_url, extract_streamwish_url, resolve_stre
 from filelionsDL import is_filelions_url, extract_filelions_url, resolve_filelions, FileLionsError
 from catboxDL import is_catbox_url, extract_catbox_url, resolve_catbox, CatBoxError
 from mediafireDL import is_mediafire_url, extract_mediafire_url, resolve_mediafire, MediaFireError
+from .pixeldrainDL import is_pixeldrain_url, extract_pixeldrain_url, resolve_pixeldrain, PixeldrainError
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,7 @@ _ROUTES: list[tuple[Callable[[str], bool], Callable, type, str]] = [
     (is_filelions_url,    resolve_filelions,    FileLionsError,    "FileLions"),
     (is_catbox_url,       resolve_catbox,       CatBoxError,       "CatBox"),
     (is_mediafire_url,    resolve_mediafire,    MediaFireError,    "MediaFire"),
+    (is_pixeldrain_url,   resolve_pixeldrain,   PixeldrainError,   "Pixeldrain"),
 ]
 
 
@@ -73,6 +75,7 @@ def extract_universal_urls(text: str) -> list[str]:
         extract_fileadda_url, extract_gofile_url, extract_streamtape_url,
         extract_dood_url, extract_mixdrop_url, extract_streamwish_url,
         extract_filelions_url, extract_catbox_url, extract_mediafire_url,
+        extract_pixeldrain_url,
     ]
     for extractor in extractors:
         for u in extractor(text):

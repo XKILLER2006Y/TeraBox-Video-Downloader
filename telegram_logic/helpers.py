@@ -30,7 +30,13 @@ _TERABOX_EXP_DOMAINS = (
     "terabox.app", "terabox.fun", "4funbox.co", "4funbox.com",
     "mirrobox.com", "nephobox.com", "1024tera.com", "momerybox.com",
     "tibibox.com", "terasharefile.com", "teraboxshare.com", "teraboxlink.com",
-    "terabox.club", "teraboxdrive.com",
+    "terabox.club", "teraboxdrive.com", "terasharelink.com", "terafast.com",
+    "terashare.net", "terabox.me", "terabox.org", "terabox.net", "terabox.xyz",
+    "teraboxlink.me", "terabox.video", "teraboxlink.net", "teraboxh5.com",
+    "terabox.download", "teradl.com", "teraboxurl.com", "teradownload.com",
+    "terabox-download.com", "teraboxdirect.com", "teraboxstream.com", "teraplay.com",
+    "dubox.com", "1024box.com", "terafileshare.com", "terabox.cl", "terabox.link",
+    "teraboxapp.net", "terafiles.net", "teraboxfile.com", "terabox.tech",
 )
 # Longest-first so e.g. "4funbox.com" is preferred over the "4funbox.co" prefix.
 _TERABOX_EXP_DOMAIN_ALT = "|".join(
@@ -38,7 +44,7 @@ _TERABOX_EXP_DOMAIN_ALT = "|".join(
 )
 
 TERA_EXP_URL_RE = re.compile(
-    r"https?://(?:www\.)?(?:" + _TERABOX_EXP_DOMAIN_ALT + r")"
+    r"https?://(?:[\w.-]+\.)?(?:" + _TERABOX_EXP_DOMAIN_ALT + r")"
     r"(?:"
     # Query-param form: /sharing/link?...surl=<surl>
     r"/(?:sharing/link|wap/share/filelist|share/link)\?[^\s#]*?surl=1?(?P<surl_param>[A-Za-z0-9_-]+)"

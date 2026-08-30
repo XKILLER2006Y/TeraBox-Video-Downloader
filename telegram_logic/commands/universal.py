@@ -48,6 +48,7 @@ async def handle_dl(event):
     # ── Detect platform and route ────────────────────────────────────────────
     from ..terabox_exp import process_terabox_experimental
     from ..diskwala import process_diskwala
+    from universalDL import extract_universal_urls
     from telegram_logic.universal import process_universal
     from telegram_logic.social_dl import extract_all_social_urls, process_social
     from flareDL import extract_all_flare_urls
@@ -67,6 +68,11 @@ async def handle_dl(event):
         if u not in seen_urls:
             seen_urls.add(u)
             jobs.append((u, process_diskwala))
+
+    for u in extract_universal_urls(arg):
+        if u not in seen_urls:
+            seen_urls.add(u)
+            jobs.append((u, lambda ev, url: process_universal(ev, url, bot)))
 
     for u in extract_all_social_urls(arg):
         if u not in seen_urls:
@@ -95,6 +101,15 @@ async def handle_dl(event):
             await proc(event, url)
         return
 
-    # Fall back to Universal platforms (filesadda, GoFile, StreamTape, Dood, etc.)
+    # Check for any generic HTTP/HTTPS URL
+    import re
+    generic_urls = re.findall(r"https?://[^\s\"'<>]+", arg)
+    if generic_urls:
+        logger.info(f"/dl [generic fallback -> social/yt-dlp] {generic_urls[0][:60]}")
+        for u in generic_urls[:3]:
+            await process_social(event, u)
+        return
+
+    # Fall back to Universal platforms
     logger.info(f"/dl [universal] {arg[:60]}")
     await process_universal(event, arg, bot)

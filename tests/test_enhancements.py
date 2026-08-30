@@ -67,12 +67,29 @@ class TestTeraBoxEnhancements(unittest.TestCase):
             "teraboxlink.com",
             "terabox.club",
             "teraboxdrive.com",
+            "terafast.com",
+            "terashare.net",
+            "terabox.me",
+            "terabox.xyz",
+            "terabox.org",
+            "terasharelink.com",
         ]
         for domain in new_domains:
             self.assertIn(domain, _TERABOX_EXP_DOMAINS)
             url = f"https://{domain}/s/1TestingXYZ99"
             extracted = extract_all_terabox_url_exp(f"download {url} now")
             self.assertEqual(len(extracted), 1)
+
+    def test_terabox_subdomains(self):
+        subdomain_urls = [
+            "https://dm.1024tera.com/s/1TestingXYZ99",
+            "https://wap.terabox.com/wap/share/filelist?surl=TestingXYZ99",
+            "https://m.1024tera.com/s/1TestingXYZ99",
+            "https://ww2.terabox.app/s/1TestingXYZ99",
+        ]
+        for url in subdomain_urls:
+            extracted = extract_all_terabox_url_exp(f"link is {url}")
+            self.assertEqual(len(extracted), 1, f"Failed for {url}")
 
     def test_extract_surl_raises_direct_error(self):
         with self.assertRaises(TeraBoxDirectError):
@@ -86,6 +103,9 @@ class TestMixedBatchRouting(unittest.TestCase):
             "1. https://1024terabox.com/s/1ABC123\n"
             "2. https://diskwala.com/app/64f123456789abcdef012345\n"
             "3. https://gofile.io/d/xyz789\n"
+            "4. https://pixeldrain.com/u/ab12cd34\n"
+            "5. https://cashsnap.in/s/9876543210\n"
+            "6. https://flezen.in/s/5544332211\n"
         )
         tb_links = extract_all_terabox_url_exp(text)
         dw_links = extract_all_diskwala_urls(text)
@@ -93,7 +113,7 @@ class TestMixedBatchRouting(unittest.TestCase):
 
         self.assertEqual(len(tb_links), 1)
         self.assertEqual(len(dw_links), 1)
-        self.assertEqual(len(univ_links), 1)
+        self.assertGreaterEqual(len(univ_links), 2)
 
 
 if __name__ == "__main__":

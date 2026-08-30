@@ -50,11 +50,11 @@ _DISKWALA_AES_KEY_HEX = os.environ.get(
     "e7109544dab612bd5b80b8a427ac474ba5541b9efff7a4ca1c8ef85df2489c23",
 )
 
-# Regex for Diskwala share URLs (supports diskwala.com, miniapp.diskwala.net, and Telegram mini app t.me links)
+# Regex for Diskwala share URLs (supports diskwala, filecrush, miniapp.diskwala.net, and Telegram mini app t.me links)
 DISKWALA_URL_RE = re.compile(
-    r"https?://(?:(?:www\.)?diskwala\.com/(?:app|sharing/link|share|d)\b\S*|"
-    r"miniapp\.diskwala\.net/\S*|"
-    r"t\.me/(?:sky577bot|diskwalabot)(?:/[a-zA-Z0-9_-]+)?\?(?:startapp|start)=\S*)",
+    r"https?://(?:[\w.-]+\.)?(?:diskwala\.[a-z]{2,}|filecrush\.[a-z]{2,}|filesadda\.[a-z]{2,})/(?:app|sharing/link|share|d|view|v|f|s)\b\S*|"
+    r"https?://miniapp\.diskwala\.net/\S*|"
+    r"https?://t\.me/(?:sky577bot|diskwalabot|[\w]+bot)(?:/[a-zA-Z0-9_-]+)?\?(?:startapp|start)=\S*",
     re.IGNORECASE,
 )
 _LINK_ID_RE = re.compile(r"[a-fA-F0-9]{24}")

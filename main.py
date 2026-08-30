@@ -159,6 +159,18 @@ async def handle_message(event):
             seen_urls.add(u)
             jobs.append((u, process_flezen))
 
+    # 7. Generic URL fallback (routes through yt-dlp & direct stream resolver)
+    if not jobs:
+        generic_urls = re.findall(r"https?://[^\s\"'<>]+", text)
+        filtered_urls = [
+            u for u in generic_urls
+            if not re.search(r"t\.me/(?:\+|joinchat/|c/|[a-zA-Z0-9_]+$)", u)
+        ]
+        for u in filtered_urls:
+            if u not in seen_urls:
+                seen_urls.add(u)
+                jobs.append((u, process_social))
+
     if jobs:
         log.info("auto-detect batch", extra={"chat_id": event.chat_id, "job_count": len(jobs)})
         await _run_batch(event, jobs)

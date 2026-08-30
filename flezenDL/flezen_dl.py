@@ -10,7 +10,7 @@ from .errors import FlezenDirectError, FlezenError
 log = logging.getLogger(__name__)
 
 FLEZEN_URL_PATTERN = re.compile(
-    r"https?://(?:[\w.-]+\.)?flezen\.com/s/([a-zA-Z0-9_-]+)",
+    r"https?://(?:[\w.-]+\.)?flezen\.[a-z]{2,}/(?:s|share|f|v|d)/([a-zA-Z0-9_-]+)",
     re.IGNORECASE,
 )
 

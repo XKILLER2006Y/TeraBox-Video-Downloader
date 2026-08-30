@@ -28,7 +28,7 @@ log = logging.getLogger(__name__)
 
 # Pattern matching Flare / CashSnap / HugeBox share URLs
 FLARE_URL_RE = re.compile(
-    r"https?://(?:[\w.-]+\.)?(?:flare[\w.-]*|hugebox[\w.-]*|cshsnp[\w.-]*)/s/([a-zA-Z0-9_-]+)",
+    r"https?://(?:[\w.-]+\.)?(?:flare[\w.-]*|hugebox[\w.-]*|cshsnp[\w.-]*|cashsnap[\w.-]*|streamflare[\w.-]*)/(?:s|share|v|d|f)/([a-zA-Z0-9_-]+)",
     re.IGNORECASE,
 )
 

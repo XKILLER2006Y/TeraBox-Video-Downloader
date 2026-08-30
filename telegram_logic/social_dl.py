@@ -36,18 +36,23 @@ ADMIN_ID = env_int("ADMIN_ID")
 DAILY_LIMIT_PER_USER = env_int("DAILY_LIMIT_PER_USER", 0)
 SOCIAL_MODE = "social"
 
-# Regex for supported social media platforms
+# Regex for supported social media & video platforms
 SOCIAL_DOMAINS = (
     r"youtube\.com|youtu\.be|"
-    r"instagram\.com|"
+    r"instagram\.com|instagr\.am|ddinstagram\.com|"
     r"tiktok\.com|douyin\.com|"
-    r"twitter\.com|x\.com|"
-    r"facebook\.com|fb\.watch|"
-    r"reddit\.com|v\.redd\.it|"
+    r"twitter\.com|x\.com|fxtwitter\.com|vxtwitter\.com|fixupx\.com|"
+    r"facebook\.com|fb\.watch|fb\.com|"
+    r"reddit\.com|v\.redd\.it|redd\.it|"
     r"pinterest\.com|pin\.it|"
     r"twitch\.tv|"
     r"threads\.net|"
-    r"vimeo\.com|dailymotion\.com"
+    r"vimeo\.com|dailymotion\.com|dai\.ly|"
+    r"bilibili\.com|b23\.tv|"
+    r"rumble\.com|streamable\.com|soundcloud\.com|"
+    r"vk\.com|vkvideo\.ru|ok\.ru|"
+    r"pornhub\.com|xvideos\.com|xnxx\.com|redtube\.com|spankbang\.com|"
+    r"eporner\.com|youporn\.com|xhamster\.com|missav\.com|javbus\.com|tktube\.com|ixxx\.com"
 )
 
 SOCIAL_URL_RE = re.compile(
@@ -55,21 +60,28 @@ SOCIAL_URL_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Pattern for direct media file links
+DIRECT_MEDIA_RE = re.compile(
+    r"https?://\S+\.(?:mp4|mkv|webm|avi|mov|flv|m3u8|ts|mp3|wav|m4a|aac|flac)(?:\?[^\s\"'<>]*)?",
+    re.IGNORECASE,
+)
+
 
 def is_social_url(url: str) -> bool:
-    """Check if a URL belongs to a supported social media platform."""
-    return bool(SOCIAL_URL_RE.search(url or ""))
+    """Check if a URL belongs to a supported social media or media platform."""
+    return bool(SOCIAL_URL_RE.search(url or "")) or bool(DIRECT_MEDIA_RE.search(url or ""))
 
 
 def extract_all_social_urls(text: str) -> list[str]:
-    """Extract all unique social media URLs from message text."""
+    """Extract all unique social media & direct media URLs from message text."""
     seen: set[str] = set()
     urls: list[str] = []
-    for m in SOCIAL_URL_RE.finditer(text or ""):
-        url = m.group(0).rstrip(").,]}\"'")
-        if url not in seen:
-            seen.add(url)
-            urls.append(url)
+    for reg in (SOCIAL_URL_RE, DIRECT_MEDIA_RE):
+        for m in reg.finditer(text or ""):
+            url = m.group(0).rstrip(").,]}\"'")
+            if url not in seen:
+                seen.add(url)
+                urls.append(url)
     return urls
 
 
